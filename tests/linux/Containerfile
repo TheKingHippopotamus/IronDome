@@ -20,7 +20,13 @@
 #
 # The Ubuntu packages come from the signed Ubuntu archive, at the versions it
 # serves on the day of the build; /etc/irondome-test-image.versions records
-# them and every run prints them next to its result.
+# them and every run prints them next to its result. They are not frozen, so
+# a TPM result can change with swtpm or tpm2-tools and no change here; compare
+# the printed versions. Freezing them is not possible on both architectures:
+# `apt-get update --snapshot` needs snapshot.ubuntu.com, which serves the
+# x86-64 archive but not ubuntu-ports (arm64; it answered 401 in November
+# 2026), and exact version pins stop building as soon as a security update
+# replaces the pinned version in the archive.
 
 FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
 
