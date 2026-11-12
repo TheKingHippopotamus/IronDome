@@ -1,0 +1,53 @@
+EFF Large Wordlist for Passphrases
+==================================
+
+File:      eff_large_wordlist.txt
+           7776 lines, each "<five dice rolls><TAB><word>"
+Author:    Joseph Bonneau, Electronic Frontier Foundation (EFF), 2016
+Published: https://www.eff.org/deeplinks/2016/07/new-wordlists-random-passphrases
+           https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt
+Licence:   Creative Commons Attribution 3.0 United States (CC BY 3.0 US)
+           https://creativecommons.org/licenses/by/3.0/us/
+
+IronDome includes the list without changes. It is used to generate
+passphrases (irondome.generator.generate_passphrase) and to recognise
+dictionary words when the strength of a password is estimated. The list
+remains under CC BY 3.0 US; it is not covered by IronDome's own licence.
+
+SHA-256 of eff_large_wordlist.txt:
+
+    addd35536511597a02fa0a9ff1e5284677b8883b83e986e43f15a3db996b903e
+
+irondome.generator refuses to use the file when its digest is anything else,
+and tests/unit/test_generator.py asserts the digest of the bundled file.
+(Line endings are normalised to LF before hashing, so a Git checkout that
+rewrote them to CRLF still verifies. The digest above is of the LF file.)
+
+
+Where this copy came from and how it was checked (2026-11-11)
+--------------------------------------------------------------
+
+It was not downloaded from a website. It was copied out of the diceware
+1.0.1 wheel from PyPI (diceware/wordlists/wordlist_en_eff.txt), which
+carries the list in the format EFF publishes, and compared with a second,
+separately packaged copy that holds the words alone:
+
+    passlib 1.7.4, passlib/_data/wordsets/eff_long.txt
+    SHA-256 6d557f0693958fb5e650b68b5bee585eb82cf4da32965505c789e924743bc522
+    (xkcdpass 1.30.0 ships the same bytes as xkcdpass/static/eff-long)
+
+What was checked:
+
+  * 7776 lines and 7776 different words;
+  * every word is lower-case a-z, plus the hyphen in drop-down, felt-tip,
+    t-shirt and yo-yo; words are 3 to 9 characters long;
+  * the dice keys run from 11111 to 66666 in order, none missing;
+  * the first word is "abacus" and the last is "zoom";
+  * the sequence of words is identical to passlib's, and the dice keys
+    followed by passlib's words reproduce this file byte for byte;
+  * no word is the beginning of another word, so a passphrase splits back
+    into its words in exactly one way whatever separator joins them.
+
+To compare this file with EFF's own copy:
+
+    curl -sL https://www.eff.org/files/2016/07/18/eff_large_wordlist.txt | shasum -a 256

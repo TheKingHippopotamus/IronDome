@@ -1,105 +1,148 @@
 # Contributing to IronDome
 
-Thank you for your interest in contributing to IronDome! This guide will help you get started.
+Thank you for looking. Bug reports, tests, documentation fixes and code are
+all welcome, and a small pull request that does one thing is the easiest kind
+to review. Questions and bugs go to the
+[issue tracker](https://github.com/TheKingHippopotamus/IronDome-Bunker/issues).
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
-## Code of Conduct
+IronDome is a security tool, so the bar for a change is simple to state: it
+must keep every claim in [docs/CLAIMS.md](docs/CLAIMS.md) true, and it must
+come with the tests that show it does.
 
-By participating in this project, you agree to maintain a respectful and inclusive environment for everyone.
+**Security problems are not issues.** Report them privately, as
+[SECURITY.md](SECURITY.md) describes, and not in a public issue or pull
+request. Anything that makes a statement in docs/CLAIMS.md false counts.
 
-## How to Contribute
+## Set up
 
-### Reporting Bugs
+You need [uv](https://docs.astral.sh/uv/) 0.13.4 or newer (`uv --version`).
+`pyproject.toml` requires it, so an older uv stops with an error. uv uses a
+Python 3.9.2 or newer from your machine, or downloads one.
 
-1. Check [existing issues](https://github.com/TheKingHippopotamus/IronDome-Bunker/issues) first
-2. Open a new issue with:
-   - Clear title and description
-   - Steps to reproduce
-   - Expected vs actual behavior
-   - Python version and OS
-   - Relevant logs (ensure no sensitive data is included)
-
-### Suggesting Features
-
-Open an issue with the `enhancement` label. Include:
-- What problem it solves
-- Proposed solution
-- Any alternatives you've considered
-
-### Pull Requests
-
-1. Fork the repository
-2. Create a feature branch from `main`:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
-3. Make your changes following the guidelines below
-4. Write or update tests as needed
-5. Commit using [Conventional Commits](https://www.conventionalcommits.org/):
-   ```
-   feat: add password export functionality
-   fix: resolve session timeout race condition
-   docs: update installation instructions
-   ```
-6. Push to your fork and open a PR against `main`
-
-### Development Setup
-
-```bash
-git clone https://github.com/TheKingHippopotamus/IronDome-Bunker.git
-cd IronDome-Bunker
-pip install -r requirements.txt
-python -m password_manager
+```console
+$ git clone https://github.com/TheKingHippopotamus/IronDome-Bunker.git
+$ cd IronDome-Bunker
+$ uv sync --locked --extra dev
 ```
 
-### Code Guidelines
+`--locked` installs exactly the hash-checked versions in `uv.lock` and stops
+if the lockfile is out of date, instead of quietly resolving new ones.
 
-- **Python 3.8+** compatibility required
-- Follow PEP 8 style conventions
-- Use type hints on function signatures
-- Meaningful variable and function names — no single-letter variables outside loops
-- Error handling must be explicit — no silent catches
-- Comments explain **why**, code explains **what**
+## Run the tests
 
-### Security Guidelines
+```console
+$ uv run pytest -q -p no:cacheprovider                 # the whole suite
+$ uv run pytest -q -p no:cacheprovider tests/claims    # only the claim tests
+$ uv run ruff check src tests scripts                  # lint
+```
 
-This is a security-critical project. All contributions must:
+`-p no:cacheprovider` keeps pytest from writing `.pytest_cache` into your
+checkout. Nothing in the suite can reach a real vault: every test runs in
+temporary directories, with network sockets disabled and Touch ID prompts
+switched off.
 
-- **Never** log, print, or expose sensitive data (passwords, keys, salts)
-- **Never** store credentials in plaintext
-- **Never** weaken existing encryption or authentication mechanisms
-- **Never** reduce PBKDF2 iteration counts
-- Use the `secrets` module for any random generation (not `random`)
-- Maintain file permission restrictions on sensitive directories
-- Follow OWASP guidelines for any authentication changes
+Tests that need hardware are marked:
 
-### Testing
+* `secure_enclave` runs automatically on a Mac with a Secure Enclave, once the
+  Xcode Command Line Tools provide `swiftc` to compile the helper, and is
+  skipped everywhere else. It never shows a Touch ID prompt.
+* `tpm` runs against a TPM 2.0 when `IRONDOME_TEST_TPM=1`. The Linux harness
+  does that for you, in a container with a software TPM:
 
-- Every feature must include tests
-- Tests go in co-located files (`*.test.py` next to the module)
-- Mock external services — never hit real APIs in tests
-- Never include real passwords or sensitive data in test fixtures
+  ```console
+  $ scripts/test-linux.sh                         # the whole suite, Python 3.9 and 3.13
+  $ scripts/test-linux.sh -p 3.12 -- -x -k tpm    # other Pythons, any pytest arguments
+  ```
 
-### What We're Looking For
+  It needs podman or docker, and network access to build the image, which
+  installs exactly what `uv.lock` pins, hash-checked. The tests then run in a
+  container with no network and no capabilities. The repository is copied in
+  as a tar stream, so a test cannot write to your checkout; files git ignores,
+  such as `.env`, are not copied.
+* `interactive` needs a person at the sensor and runs only with
+  `IRONDOME_TEST_INTERACTIVE=1`.
 
-- Bug fixes with clear root cause analysis
-- Security improvements and hardening
-- Cross-platform compatibility fixes
-- Performance improvements to encryption/decryption
-- Documentation improvements
-- Accessibility improvements to the CLI interface
+To run the release gates on your own machine, as CI does:
 
-### What We Won't Merge
+```console
+$ scripts/check.sh            # lockfile, the suite on Python 3.9 and 3.14, lint, claims,
+                              # dependency audit, build, and a clean install of the wheel
+$ scripts/check.sh --linux    # the same, then scripts/test-linux.sh
+$ scripts/check.sh --dist dist --release 4.0.0   # check a hand-made build before uploading it
+```
 
-- Changes that weaken security
-- Features that transmit data over the network
-- Dependencies with known vulnerabilities
-- Code without tests
-- Breaking changes without migration path
+It stops at the first gate that fails. It needs network access: the audit
+asks PyPI about known vulnerabilities, and uv downloads Python 3.9 or 3.14 if
+one of them is missing.
 
-## License
+## Every claim has a test
 
-By contributing, you agree that your contributions will be licensed under the [GPL-3.0 License](LICENSE).
+[`src/irondome/claims.json`](src/irondome/claims.json) is the one list of
+what IronDome promises. Each claim has an `id`, a `statement` (the promise), a
+`boundary` (where the promise stops), its `platforms`, the pytest node ids
+that hold it under `tests`, and `selfcheck`: the check `irondome verify` runs
+for it on a user's own machine, or `null`.
 
-## Questions?
+* A claim with the id `some-claim` has a test file of its own,
+  `tests/claims/test_some_claim.py`, and lists every test function in it.
+* [docs/CLAIMS.md](docs/CLAIMS.md) is generated from the registry. Never edit
+  it by hand.
+* `tests/claims/test_registry.py` fails the build if a claim has no test, if a
+  listed test does not exist, if a test in a claim's own file is not listed,
+  if a claim file has no claim, or if docs/CLAIMS.md is not what the script
+  renders.
 
-Open an issue or reach out to [@TheKingHippopotamus](https://github.com/TheKingHippopotamus).
+If a change alters what IronDome can promise, change the registry, its tests
+and the document in the same pull request:
+
+```console
+$ uv run python scripts/claims.py render     # rewrite docs/CLAIMS.md
+$ uv run python scripts/claims.py --check    # what CI runs: fails if it is stale
+```
+
+A claim that says more than its tests show is a bug.
+
+## Rules for code
+
+* **Python 3.9.2 or newer.** CI runs the suite on Python 3.9, 3.11, 3.13 and
+  3.14, on Linux and macOS, so a feature newer than 3.9, such as `match` or an
+  `X | Y` union evaluated at run time, fails there.
+* **One runtime dependency.** The standard library and `cryptography`, nothing
+  else; `tests/claims/test_one_dependency.py` enforces it. Development tools
+  go in the `dev` extra. After changing a dependency, run `uv lock`; it only
+  picks releases that have been public for at least seven days.
+* **No network code**, anywhere in `src/`. `tests/claims/test_no_network.py`
+  enforces that too.
+* **Key material lives in `irondome.secmem.SecureBuffer`** and is wiped in a
+  `with` block or a `finally`. Never put a key into a `bytes`, a `str`, an
+  exception message, a log line, an environment variable or a subprocess
+  argument.
+* **Library code never prints.** It raises the exceptions in
+  `irondome.errors`, whose messages are safe to show and say what to do next.
+  The command line does all input and output.
+* **Everything read from disk is hostile input.** Validate types, sizes and
+  ranges; malformed input raises `VaultError` or `UsageError`, never an
+  unhandled exception.
+* **Lint clean.** `uv run ruff check src tests scripts` passes, with the rules
+  in `ruff.toml`: Python 3.9 as the target, 120-character lines, sorted
+  imports, and the bugbear and bandit (security) checks.
+* **Made-up secrets only.** Never put a real password, key or token in a
+  test, a fixture, an issue or a log you attach.
+* **Say what the code does.** Docstrings, help text and documentation state
+  guarantees and limits plainly.
+
+## Pull requests
+
+1. One change per pull request, with a description of what it changes and why.
+2. Tests for the behaviour and for its failure paths; a bug fix comes with a
+   test that fails without it.
+3. These pass:
+   `uv run pytest -q -p no:cacheprovider`,
+   `uv run ruff check src tests scripts` and
+   `uv run python scripts/claims.py --check`.
+4. A changelog entry under the unreleased version at the top of
+   [CHANGELOG.md](CHANGELOG.md).
+
+By contributing you agree that your contribution is licensed under the
+[GPL-3.0-only](LICENSE) license.

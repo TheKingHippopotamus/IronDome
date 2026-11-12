@@ -1,0 +1,71 @@
+# The Linux test image: Ubuntu 24.04 with tpm2-tools and a software TPM 2.0,
+# plus, for each Python version asked for, a virtual environment holding exactly
+# what uv.lock pins, every file checked against its hash. Built and used by
+# scripts/test-linux.sh; nothing in it is shipped.
+#
+# Building the image is the only step that uses the network: the tests then run
+# in a container started with --network=none. The build context is a temporary
+# directory that holds this file, uv.lock and pyproject.toml, and nothing else.
+#
+# Both base images are pinned by the digest of their multi-architecture
+# index, so this file builds the same thing on x86-64 and on arm64 and a
+# moved tag cannot change what is tested. To move a pin on purpose:
+#
+#   podman pull docker.io/library/ubuntu:24.04
+#   podman image inspect docker.io/library/ubuntu:24.04 --format '{{json .RepoDigests}}'
+#
+# prints two digests: the index and the image for your own architecture.
+# `podman manifest inspect docker.io/library/ubuntu:24.04` lists the
+# per-architecture ones; the index is the other one.
+#
+# The Ubuntu packages come from the signed Ubuntu archive, at the versions it
+# serves on the day of the build; /etc/irondome-test-image.versions records
+# them and every run prints them next to its result.
+
+FROM ghcr.io/astral-sh/uv:0.13.7@sha256:96f40d3904aad8d0bd010539001d36c8e2188b981e1334471a90c4a1d93bb490 AS uv
+
+FROM docker.io/library/ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates git procps \
+        python3 python3-venv python3-pip \
+        tpm2-tools swtpm swtpm-tools libtss2-tcti-swtpm0t64 \
+        libsecret-tools \
+    && rm -rf /var/lib/apt/lists/* \
+    && dpkg-query -W -f='${Package} ${Version}\n' \
+        swtpm swtpm-tools libtpms0 tpm2-tools libtss2-tcti-swtpm0t64 python3 \
+        > /etc/irondome-test-image.versions \
+    && cat /etc/irondome-test-image.versions
+
+COPY --from=uv /uv /uvx /usr/local/bin/
+
+# Tests run as an ordinary user: file modes and TPM access are part of what is tested.
+RUN useradd --create-home --shell /bin/bash tester
+USER tester
+WORKDIR /home/tester
+
+ENV UV_PYTHON_INSTALL_DIR=/home/tester/.uv-python \
+    UV_LINK_MODE=copy \
+    UV_NO_PROGRESS=1 \
+    PATH=/home/tester/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The interpreters to test on. scripts/test-linux.sh passes the versions it was asked for.
+ARG PYTHONS="3.9 3.13"
+RUN uv python install $PYTHONS
+
+# What uv.lock pins for the tests (the runtime dependency and the dev extra).
+# --locked refuses a uv.lock that no longer matches pyproject.toml,
+# --require-hashes refuses any file whose hash the lock does not list, and
+# --no-build refuses to build anything from source: uv.lock has a wheel for
+# every one of them, on both architectures and every supported Python.
+COPY --chown=tester:tester uv.lock pyproject.toml /home/tester/lock/
+RUN cd /home/tester/lock \
+    && uv export --quiet --locked --all-extras --no-emit-project --format requirements-txt -o requirements.txt \
+    && for version in $PYTHONS; do \
+        uv venv --quiet --python "$version" "/home/tester/venv-$version" \
+        && uv pip install --quiet --no-cache --no-build --require-hashes \
+            --python "/home/tester/venv-$version/bin/python" -r requirements.txt \
+        || exit 1; \
+    done

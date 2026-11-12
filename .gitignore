@@ -24,8 +24,8 @@ env_pswd/
 venv/
 ENV/
 
-# Virtual environment
-.env
+# Virtual environment and local secrets (.env, .env.local, .envrc, ...)
+.env*
 .venv
 .venv*/
 venv*/
@@ -36,6 +36,7 @@ secrets/
 backups/
 
 # Generated files
+*.irondome
 *.enc
 salt.bin
 .master_user.enc
@@ -89,3 +90,8 @@ state/
 
 # Host-specific compose overrides (networks, secret stores) never leave this machine
 docker-compose.override.yml
+
+# Test tooling
+.hypothesis/
+.mypy_cache/
+.ruff_cache/

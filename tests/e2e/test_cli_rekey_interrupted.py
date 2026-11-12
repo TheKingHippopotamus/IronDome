@@ -1,0 +1,226 @@
+"""A re-key that is stopped part way (red-team filesystem:0).
+
+``irondome rekey`` puts the new vault in place first and then destroys what opened the old one. Before the fix
+an interruption in between left a vault whose new recovery key nobody had seen, kept the old device keys and
+the capability device secret alive (so old grants and old copies of the vault went on opening), and a second
+re-key could not find them any more. Now the new vault carries a plan of what is left to destroy from the moment
+it is live, every keyslot device key involved is recorded before the switch, an interruption the process sees
+still ends with the new recovery key shown, and the next re-key finishes the job.
+
+Faults are injected into the real command line (``python -c`` running ``irondome.cli.main.main``): SIGKILL
+stands for kill -9 or a power cut, KeyboardInterrupt for Ctrl-C.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
+from typing import Callable, Dict, Iterator, List, Optional, Tuple
+
+import pytest
+
+from conftest import PASSWORD, secret
+from irondome import caps, keys, paths
+from irondome.errors import AuthError, HardwareError
+from irondome.unlock import create_vault, open_vault, unlock
+from irondome.vault import Secret, Vault, VaultFile
+
+CLI = Callable[..., "subprocess.CompletedProcess[str]"]
+SUPPORT = Path(__file__).resolve().parents[1] / "support"
+RECOVERY_KEY = re.compile(r"[A-Z2-7]{4}(?:-[A-Z2-7]{4}){7}")
+TOKEN = "the-github-token-1234"
+
+pytestmark = pytest.mark.skipif(not hasattr(signal, "SIGKILL"), reason="needs POSIX signals")
+
+FAULTS = textwrap.dedent(
+    """
+    import os
+    import signal
+    import sys
+
+    from irondome import vault
+    from irondome.cli import cmd_admin
+
+    def kill(*args, **kwargs):
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    fault = sys.argv[1]
+    if fault == "kill-after-switch":
+        cmd_admin._retire = kill
+    elif fault == "interrupt-after-switch":
+        cmd_admin._retire = interrupt
+    elif fault == "kill-before-switch":
+        vault.Vault.copy_into = kill
+    from irondome.cli.main import main
+
+    raise SystemExit(main(sys.argv[2:]))
+    """
+)
+
+
+def run_with_fault(fault: str, *args: str) -> "subprocess.CompletedProcess[str]":
+    merged = dict(os.environ)
+    if SUPPORT.is_dir():
+        merged["PYTHONPATH"] = os.pathsep.join(filter(None, [str(SUPPORT), merged.get("PYTHONPATH", "")]))
+        merged["IRONDOME_TEST_BLOCK_SOCKETS"] = "1"
+    return subprocess.run(
+        [sys.executable, "-c", FAULTS, fault, *args], input=PASSWORD + "\n", capture_output=True, text=True,
+        env=merged, timeout=120,
+    )
+
+
+def ok(result: "subprocess.CompletedProcess[str]", code: int = 0) -> "subprocess.CompletedProcess[str]":
+    assert result.returncode == code, f"exit {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    return result
+
+
+@contextlib.contextmanager
+def opened(path: Optional[Path] = None) -> Iterator[Vault]:
+    key = secret(PASSWORD)
+    try:
+        vault = open_vault(path=path, password=key, interactive=False, allow_touch=False)
+    finally:
+        key.wipe()
+    try:
+        yield vault
+    finally:
+        vault.close()
+
+
+def build() -> str:
+    """A vault opened by the master password and this machine, with a recovery key. Returns that key."""
+    key = secret(PASSWORD)
+    try:
+        vault, recovery = create_vault(password=key, with_recovery=True)
+    finally:
+        key.wipe()
+    try:
+        github = vault.add("github", Secret(password=TOKEN))
+        vault.add("aws/prod", Secret(password="AKIA-not-a-real-key"))
+        vault.set_alias("GITHUB_TOKEN", github)
+        vault.commit()
+    finally:
+        vault.close()
+    assert recovery is not None
+    return recovery
+
+
+def device_keys() -> List[str]:
+    return sorted(path.name for path in paths.device_dir().glob("*.key"))
+
+
+def staging_files() -> List[Path]:
+    return sorted(paths.home().glob(".tmp-rekey-*.irondome"))
+
+
+def taken_before(isolated: Path) -> Tuple[str, str, bytes, List[str], Path]:
+    """What someone could have kept before the re-key: a session, a grant, their files, a copy of the vault."""
+    with opened() as vault:
+        session = caps.create_session(vault, ttl=600)
+        grant, _info = caps.create_grant(vault, ["GITHUB_TOKEN"], ttl=600)
+    with caps.open_grant(grant, consume=False):
+        pass  # it opens now
+    stolen = isolated / "stolen-caps"
+    shutil.copytree(str(paths.caps_dir()), str(stolen))
+    return session, grant, paths.vault_file().read_bytes(), device_keys(), stolen
+
+
+def rekey(cli: CLI) -> Dict[str, object]:
+    return json.loads(ok(cli("rekey", "--yes", "--password-stdin", "--json", stdin=PASSWORD + "\n")).stdout)
+
+
+def nothing_taken_before_opens(session: str, grant: str, old_copy: bytes, old_keys: List[str], stolen: Path) -> None:
+    assert not set(old_keys) & set(device_keys()), "a device key from before the re-key is still here"
+    shutil.copytree(str(stolen), str(paths.caps_dir()), dirs_exist_ok=True)  # copies of the files, put back
+    with pytest.raises(AuthError):
+        caps.open_grant(grant)
+    with pytest.raises(AuthError):
+        caps.open_session(session, VaultFile.from_bytes(old_copy))
+    with pytest.raises((HardwareError, AuthError)):
+        unlock(VaultFile.from_bytes(old_copy), password=secret(PASSWORD), interactive=False, allow_touch=False)
+    assert staging_files() == [] and not (paths.home() / keys.RETIREMENT_FILE).exists()
+    with opened() as vault:
+        assert "rekey" not in vault.meta  # nothing left to destroy
+        assert vault.value(*vault.resolve("GITHUB_TOKEN")) == TOKEN
+
+
+def test_a_rekey_killed_after_the_switch_is_finished_by_the_next_one(cli: CLI, isolated: Path) -> None:
+    old_recovery = build()
+    old_id = VaultFile.load().vault_id
+    session, grant, old_copy, old_keys, stolen = taken_before(isolated)
+    assert len(old_keys) == 2  # the password keyslot's, and the one sessions and grants are bound to
+
+    killed = run_with_fault("kill-after-switch", "rekey", "--yes", "--password-stdin", "--json")
+    assert killed.returncode == -signal.SIGKILL, killed.stderr
+    assert VaultFile.load().vault_id != old_id  # the switch happened
+    assert staging_files(), "nothing on disk says that this re-key did not finish"
+
+    document = rekey(cli)
+    assert document["leftovers"] == [] and document["finished"] is True
+    new_recovery = document["recovery_keys"]
+    assert isinstance(new_recovery, list) and len(new_recovery) == 1
+    nothing_taken_before_opens(session, grant, old_copy, old_keys, stolen)
+    current = VaultFile.load()
+    with Vault(current, unlock(current, recovery_key=new_recovery[0])) as vault:
+        assert len(vault.entries) == 2
+    with pytest.raises(AuthError):
+        unlock(current, recovery_key=old_recovery)
+
+
+@pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
+def test_a_rekey_interrupted_after_the_switch_still_shows_the_new_recovery_key(
+    cli: CLI, isolated: Path, json_mode: bool
+) -> None:
+    build()
+    old_id = VaultFile.load().vault_id
+    session, grant, old_copy, old_keys, stolen = taken_before(isolated)
+    flags = ["--json"] if json_mode else []
+    interrupted = run_with_fault("interrupt-after-switch", *flags, "rekey", "--yes", "--password-stdin")
+    assert interrupted.returncode == 130, interrupted.stderr
+    assert "interrupted" in interrupted.stderr and "Run irondome rekey again" in interrupted.stderr
+    if json_mode:
+        document = json.loads(interrupted.stdout)  # still one JSON document
+        assert document["finished"] is False
+        shown = document["recovery_keys"]
+    else:
+        shown = RECOVERY_KEY.findall(interrupted.stdout)
+    assert len(shown) == 1, interrupted.stdout
+    current = VaultFile.load()
+    assert current.vault_id != old_id
+    with Vault(current, unlock(current, recovery_key=shown[0])) as vault:  # the key shown opens the live vault
+        assert len(vault.entries) == 2
+
+    rekey(cli)
+    nothing_taken_before_opens(session, grant, old_copy, old_keys, stolen)
+
+
+def test_a_rekey_killed_before_the_switch_leaves_nothing_behind_after_the_next_one(cli: CLI) -> None:
+    build()
+    before = paths.vault_file().read_bytes()
+    keys_before = device_keys()
+    killed = run_with_fault("kill-before-switch", "rekey", "--yes", "--password-stdin")
+    assert killed.returncode == -signal.SIGKILL, killed.stderr
+    assert paths.vault_file().read_bytes() == before  # the old vault is still the vault
+    orphans = sorted(set(device_keys()) - set(keys_before))
+    assert orphans and staging_files()  # a device key and a staging file nothing will ever use
+    with opened() as vault:
+        assert vault.value(vault.find("github")) == TOKEN
+
+    document = rekey(cli)
+    assert document["leftovers"] == []
+    assert staging_files() == [] and not (paths.home() / keys.RETIREMENT_FILE).exists()
+    assert not (set(device_keys()) & (set(orphans) | set(keys_before)))  # only the new vault's key is left
+    assert len(device_keys()) == 1

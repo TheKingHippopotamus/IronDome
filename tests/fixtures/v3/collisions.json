@@ -1,0 +1,323 @@
+{
+ "format": "irondome-legacy-vault-fixture",
+ "version": 1,
+ "name": "collisions",
+ "about": "3.2.2 with websites that collide as entry names or are not valid entry names.",
+ "written_by": {
+  "irondome": "3.2.2",
+  "commit": "43b7d67",
+  "driver": "make_legacy_vault.py"
+ },
+ "mode": "password_only",
+ "kdf": "2.0.0-3.2.2",
+ "layout": "secrets",
+ "machine_id": "fixture-user@fixture-host",
+ "master_username": "fixture-admin",
+ "master_password": "Correct-Horse-Battery-9",
+ "stored_username": "fixture-admin",
+ "vault_key": "qmIx-qoraxqi5Py4YjoCnrwggZ1kE-D-oY2aCeA_g_A=",
+ "keyring": {
+  "auth_mode": "password_only"
+ },
+ "recovery_key": null,
+ "entries": [
+  {
+   "username": "alice@example.com",
+   "website": "github.com",
+   "password": "gh-alice-1",
+   "notes": "three accounts, one website",
+   "created_at": "2026-01-01 00:01:00"
+  },
+  {
+   "username": "bob@example.com",
+   "website": "github.com",
+   "password": "gh-bob-2",
+   "notes": "",
+   "created_at": "2026-01-01 00:02:00"
+  },
+  {
+   "username": "carol",
+   "website": "GitHub.com",
+   "password": "gh-carol-3",
+   "notes": "same website in another case",
+   "created_at": "2026-01-01 00:03:00"
+  },
+  {
+   "username": "alice@example.com",
+   "website": "GITHUB.COM",
+   "password": "gh-alice-4",
+   "notes": "same username as the first, website in capitals",
+   "created_at": "2026-01-01 00:04:00"
+  },
+  {
+   "username": "mallory",
+   "website": "github.com (bob@example.com)",
+   "password": "gh-mallory-5",
+   "notes": "a website that reads like a disambiguated name",
+   "created_at": "2026-01-01 00:05:00"
+  },
+  {
+   "username": "dave",
+   "website": "  padded.example.com  ",
+   "password": "padded-6",
+   "notes": "website with spaces around it",
+   "created_at": "2026-01-01 00:06:00"
+  },
+  {
+   "username": "erin",
+   "website": "tab\tand\nnewline",
+   "password": "control-7",
+   "notes": "website with control characters",
+   "created_at": "2026-01-01 00:07:00"
+  },
+  {
+   "username": "frank",
+   "website": "a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-",
+   "password": "long-8",
+   "notes": "website longer than an entry name may be",
+   "created_at": "2026-01-01 00:08:00"
+  },
+  {
+   "username": "grace",
+   "website": "a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-a-very-long-service-name-",
+   "password": "long-9",
+   "notes": "the same long website again",
+   "created_at": "2026-01-01 00:09:00"
+  },
+  {
+   "username": "heidi",
+   "website": "My Bank (personal)",
+   "password": "bank-10",
+   "notes": "not an address",
+   "created_at": "2026-01-01 00:10:00"
+  },
+  {
+   "username": "ivan",
+   "website": "192.168.1.10:8443/admin",
+   "password": "nas-11",
+   "notes": "an IP address with a port and a path",
+   "created_at": "2026-01-01 00:11:00"
+  },
+  {
+   "username": "judy",
+   "website": "ssh://git@example.com:2222/repo.git",
+   "password": "ssh-12-rotated",
+   "notes": "a URL that is not http",
+   "created_at": "2026-01-01 00:12:00",
+   "updated_at": "2026-01-01 01:14:00"
+  }
+ ],
+ "directories": [
+  {
+   "path": "backups",
+   "mode": "0700"
+  },
+  {
+   "path": "secrets",
+   "mode": "0700"
+  }
+ ],
+ "files": [
+  {
+   "path": "password_manager.log",
+   "mode": "0600",
+   "sha256": "41e254fcae341494c604b4216d0b7d2d010d72a39da9b4cbd65a99536d1424de",
+   "base64": [
+    "MjAyNi0wMS0wMSAwMDowMDowMCwwMDAgLSBJTkZPIC0gQXV0aCBtb2RlICdwYXNzd29yZF9vbmx5JyBzdG9yZWQgaW4gT1Mg",
+    "a2V5Y2hhaW4uCjIwMjYtMDEtMDEgMDA6MDA6MDAsMDAwIC0gSU5GTyAtIElyb25Eb21lIGluaXRpYWxpemVkLiBEYXRhIGRp",
+    "cmVjdG9yeTogL2hvbWUvZml4dHVyZS11c2VyLy5wYXNzd29yZF9tYW5hZ2VyCjIwMjYtMDEtMDEgMDA6MDE6MDAsMDAwIC0g",
+    "SU5GTyAtIFN0b3JlZCBidW5rZXIgZm9yIGFsaWNlQGV4YW1wbGUuY29tIGF0IGdpdGh1Yi5jb20KMjAyNi0wMS0wMSAwMDow",
+    "MjowMCwwMDAgLSBJTkZPIC0gU3RvcmVkIGJ1bmtlciBmb3IgYm9iQGV4YW1wbGUuY29tIGF0IGdpdGh1Yi5jb20KMjAyNi0w",
+    "MS0wMSAwMDowMzowMCwwMDAgLSBJTkZPIC0gU3RvcmVkIGJ1bmtlciBmb3IgY2Fyb2wgYXQgR2l0SHViLmNvbQoyMDI2LTAx",
+    "LTAxIDAwOjA0OjAwLDAwMCAtIElORk8gLSBTdG9yZWQgYnVua2VyIGZvciBhbGljZUBleGFtcGxlLmNvbSBhdCBHSVRIVUIu",
+    "Q09NCjIwMjYtMDEtMDEgMDA6MDU6MDAsMDAwIC0gSU5GTyAtIFN0b3JlZCBidW5rZXIgZm9yIG1hbGxvcnkgYXQgZ2l0aHVi",
+    "LmNvbSAoYm9iQGV4YW1wbGUuY29tKQoyMDI2LTAxLTAxIDAwOjA2OjAwLDAwMCAtIElORk8gLSBTdG9yZWQgYnVua2VyIGZv",
+    "ciBkYXZlIGF0ICAgcGFkZGVkLmV4YW1wbGUuY29tICAKMjAyNi0wMS0wMSAwMDowNzowMCwwMDAgLSBJTkZPIC0gU3RvcmVk",
+    "IGJ1bmtlciBmb3IgZXJpbiBhdCB0YWIJYW5kCm5ld2xpbmUKMjAyNi0wMS0wMSAwMDowODowMCwwMDAgLSBJTkZPIC0gU3Rv",
+    "cmVkIGJ1bmtlciBmb3IgZnJhbmsgYXQgYS12ZXJ5LWxvbmctc2VydmljZS1uYW1lLWEtdmVyeS1sb25nLXNlcnZpY2UtbmFt",
+    "ZS1hLXZlcnktbG9uZy1zZXJ2aWNlLW5hbWUtYS12ZXJ5LWxvbmctc2VydmljZS1uYW1lLWEtdmVyeS1sb25nLXNlcnZpY2Ut",
+    "bmFtZS1hLXZlcnktbG9uZy1zZXJ2aWNlLW5hbWUtYS12ZXJ5LWxvbmctc2VydmljZS1uYW1lLWEtdmVyeS1sb25nLXNlcnZp",
+    "Y2UtbmFtZS1hLXZlcnktbG9uZy1zZXJ2aWNlLW5hbWUtYS12ZXJ5LWxvbmctc2VydmljZS1uYW1lLQoyMDI2LTAxLTAxIDAw",
+    "OjA5OjAwLDAwMCAtIElORk8gLSBTdG9yZWQgYnVua2VyIGZvciBncmFjZSBhdCBhLXZlcnktbG9uZy1zZXJ2aWNlLW5hbWUt",
+    "YS12ZXJ5LWxvbmctc2VydmljZS1uYW1lLWEtdmVyeS1sb25nLXNlcnZpY2UtbmFtZS1hLXZlcnktbG9uZy1zZXJ2aWNlLW5h",
+    "bWUtYS12ZXJ5LWxvbmctc2VydmljZS1uYW1lLWEtdmVyeS1sb25nLXNlcnZpY2UtbmFtZS1hLXZlcnktbG9uZy1zZXJ2aWNl",
+    "LW5hbWUtYS12ZXJ5LWxvbmctc2VydmljZS1uYW1lLWEtdmVyeS1sb25nLXNlcnZpY2UtbmFtZS1hLXZlcnktbG9uZy1zZXJ2",
+    "aWNlLW5hbWUtCjIwMjYtMDEtMDEgMDA6MTA6MDAsMDAwIC0gSU5GTyAtIFN0b3JlZCBidW5rZXIgZm9yIGhlaWRpIGF0IE15",
+    "IEJhbmsgKHBlcnNvbmFsKQoyMDI2LTAxLTAxIDAwOjExOjAwLDAwMCAtIElORk8gLSBTdG9yZWQgYnVua2VyIGZvciBpdmFu",
+    "IGF0IDE5Mi4xNjguMS4xMDo4NDQzL2FkbWluCjIwMjYtMDEtMDEgMDA6MTI6MDAsMDAwIC0gSU5GTyAtIFN0b3JlZCBidW5r",
+    "ZXIgZm9yIGp1ZHkgYXQgc3NoOi8vZ2l0QGV4YW1wbGUuY29tOjIyMjIvcmVwby5naXQKMjAyNi0wMS0wMSAwMDoxMzowMCww",
+    "MDAgLSBJTkZPIC0gQ3JlYXRlZCBiYWNrdXBzIGRpcmVjdG9yeTogL2hvbWUvZml4dHVyZS11c2VyLy5wYXNzd29yZF9tYW5h",
+    "Z2VyL2JhY2t1cHMKMjAyNi0wMS0wMSAwMDoxMzowMCwwMDAgLSBJTkZPIC0gRG9tZSBmb3J0aWZpZWQgYXQ6IC9ob21lL2Zp",
+    "eHR1cmUtdXNlci8ucGFzc3dvcmRfbWFuYWdlci9iYWNrdXBzLy5wYXNzd29yZHNfYmFja3VwXzIwMjYwMTAxLTAwMTMwMC5l",
+    "bmMKMjAyNi0wMS0wMSAwMToxMzowMCwwMDAgLSBJTkZPIC0gU3VjY2Vzc2Z1bCBsb2dpbiBmcm9tIGZpeHR1cmUtaG9zdAoy",
+    "MDI2LTAxLTAxIDAxOjE0OjAwLDAwMCAtIElORk8gLSBVcGRhdGVkIGVudHJ5IGZvciBqdWR5IGF0IHNzaDovL2dpdEBleGFt",
+    "cGxlLmNvbToyMjIyL3JlcG8uZ2l0Cg=="
+   ]
+  },
+  {
+   "path": "settings.json",
+   "mode": "0600",
+   "sha256": "4811044867afa6b113f6da537833a30ec40afbd6a906427b01d12ea574199657",
+   "base64": [
+    "ewogICJwYXNzd29yZF9sZW5ndGgiOiAyNCwKICAidXNlX3NwZWNpYWxfY2hhcnMiOiB0cnVlLAogICJ1c2VfdXBwZXJjYXNl",
+    "IjogdHJ1ZSwKICAidXNlX2RpZ2l0cyI6IHRydWUsCiAgInNlc3Npb25fdGltZW91dCI6IDE4MDAsCiAgImF1dG9fY29weV9j",
+    "bGlwYm9hcmQiOiBmYWxzZSwKICAic2hvd19zdHJlbmd0aCI6IHRydWUKfQ=="
+   ]
+  },
+  {
+   "path": "backups/.passwords_backup_20260101-001300.enc",
+   "mode": "0600",
+   "sha256": "b283bcd9691197d131e0117a32fea06f6e7dbded63c01e27754892146c6a343d",
+   "base64": [
+    "Z0FBQUFBQnBWYnZRa0dMZ29YWG1Xc2xHeHhneVBzTFgwVF9vWnhoRVRCcHp6MkltVGJYWHRXNURIU3VXVVZrWnZ2cTJmT2tn",
+    "enlrb2pxVmEzejY4ekkzbnVoR1Y2Sm1oSi1JUVV0QzhZamwxU2Eyc3RzMzl0Um9aOHRPNFlRb2p1WUVQZjlFSmNiUEhhVkpG",
+    "QmtBeG92U2p4MzZkcGhpUk0xMGIxOWV0TDZJc3VuM2lZTjktcUE4b0N6X01Bd2M3UmY3aTlSSFpjUWt6RWdWdzFuRDIxVEpS",
+    "UHJGM2tXVzd5c3E2UURtY3RCc0hjMlNEMG9UbDNyRXZpaHBSbzh3UFZhQ0NtdC1jbWRCTWIxRkhqd0JYOVkxOFNkTGlfWlA1",
+    "aDhvSFh0blNONTh2eWtEUm9lYm9zNno1NnJPT1doVTMzRl9xRGd3NVE0R0E0WGIyMjdhcExuc3I4RFRBRTVfbzZNWHMwSWFk",
+    "a25FWFVYUjFjY3ZubDhsRFFENFNWc1lNR1dLbFo4WUVBSEVkQnB4d01POU43ODQzN1M1N1pKQ0lHQ0Q5RUtxTDNxRFN6d1I0",
+    "NEhMTnpXWjZVZm5YdFhDNzBybVd3d0w1YUFnLVFfaHl5c3U1WUhGQlE5LVVhU3A2eVZXSGd2cGU3R3ctRnRseHFaUjhtYVRZ",
+    "SVpXTC00dFc5UVFEa3o0UmRCcmhTTlVtUGpncXlsZlY4ZjdvMzJKbUVHcloxLUJiSE8tTncyNzFhZVVQVENTVUVYTzRicUZs",
+    "TXFDeEI4ejZXUm9DUUZEeFppZXR6WkhKZ2JBQWVDUktfdjdZS0tTZGhvVEh2Mm1TVnRRQ3A4Z092c2xfOFNOYWFhYUVfWXpI",
+    "STBoYk91Yml1akdyYkFZeHVXaHg5Z09mRGdQX2lDTmZFZ00xb21CbXc4bkMxVHpZZjEwcVkzZ1lDVnQwZGp6WGthUS1ERkJV",
+    "NEFkaTc2ZW44OTFVZE82WXhhVFAxS3g0bjdUY2lhT1JHTmoxZWVsVHZmNFB2NXFsSjVzWVFWU2JmaTVOcWhObVc3YWh4ejEt",
+    "XzJOOXYyUXJjSE1YcVpDN0MxTG95NlVxbENTb1FuUFhScXB0ZjRmVzFXd29nVXV4T09XMVRTOTRWdkdqVTE2MFZLdFY2cm1Z",
+    "cmc3VVVvQTQ1Uk9BaGVWVHVMYV90dDFDZnM5al9DYktGV3N1eTB3U1h5NHByUlN6ZnlodjJhT2xfb2FBeEh2WEtSWGcxRHpF",
+    "OUtqM3lwMkxlcDZOLVJVUlQ0MEM0d0ZSZ2pWNy1naGl4TXo1bDFpWHdjSVVJU2N0US1SdGVUZ2d2RWJfUUJuLUMwQUI3dGRO",
+    "ZEp6dWd1V3ZEelkxU0hVWmpJWTlFeFRNbW9OdlV6UTZYQmNySUtlWWFTenlvS1lhbTBPbU45YTRGT2RWalFlTks0SzhiNmxi",
+    "cHFmQWsyVU03aDFlbVkwRS1wLTAwSTJrQlBzVWZOODcxQy0wdGZnMjdpOUdqVlFQZ2p6YmJ0aDNwRngyRkZmUi1EX3NRMkg0",
+    "T1N4NGFoYk9lR1lIb0Q1NjdQU29OTW94YkFveHhNdmFJUHNhRnBfakVGLVRnYXFDUjFuNXdibjQ1Sm5LVWlnOC1MUjlNMWVQ",
+    "U0tNRFJLdjVwZkJ3Q2s2QzVDTDYxOVFZdS1laWF5alhXUlUtNWJDampuc0lNY0dFd0ZXdkp1aXZ6VW1NNzhickZxWU5CT1hG",
+    "MERRMnYxNEMwNFZEbk03eGdSWmJyZFgyRlBZa1BVWmhobUk2Q2ZIenAyYlBMc2lzQkk0Z25fdHdINVlwdmw3enV5Z1BHcnFS",
+    "RjZqNnlnOEUtbjhZcUZ0aS1VZjFQRGtCYTJHU0FZV2Y5bHFGcVpGa0pVYW5QMG9BWk5veE5TRlR6bnVBSjZ2MnU1RVZZeUN2",
+    "anNDX0FnRm9VczR2eTlZdmNwWHp4NlN2aEhQeWg5c2k3THJpLUNDNGR4c2tSMU1vck5DaUpQS2Y4b0w5NTdjVWNGQy1vejk2",
+    "QV8xeWJPMmdnVjdxU3NSXzFmMGwzOGlTazcxRG1PZWRkR3haU0g0d2Q2ZkRyb0kzbWpnR2FIRzRMVjJ6Nll4dG9xRUhIMkd0",
+    "VWlRc24waktkLVFmd2pMOElveDBnd3dQbVhXbmRyc0phN2l1Y3NhZlNRUi1wTFZ0aDBvR3E4aFBOUHFJYUFLNFEzRERmNExB",
+    "OTVFVUQtZ3BWZ3Z4OWdQTlp6d3QyYWxJNTBXWTNjVGJLZmFSZHMzLS1NNWlLSkFYdmVnWUV1aUVjZlhzN1FUb3JFVWowMVZM",
+    "TFByaXkyLWw3Qkdzbjd6NlhNNktKVGdPVjNNb1FEcEhjdGZhSEFnZENNdVFvYVVrV1lQRmhuVVVxbHF5Rm1YOTg4LTFfX01F",
+    "LXNiUmZDQVpveExSUm0xbXNPdkdISjhxcXdVLVI3ckctSkNaRzhWZlB2WFluZjl1dWtWR0EyVjlHbWluMEFualV3SGJQbGx6",
+    "ZWJNTGF4UFZLMUFLSGR2Mk9ZWE8tYVp4b0RNU0FWZ0M4QUsxVDBUM3RHc1ZyZTVUZ19PTTNqTnNZdGFfcFp6dnVGb3NNQkFM",
+    "SktEeG9fd2ZRN2J2b0hCRFhUNzQzUlkwZVV6Uml6bjFKc09RVjZHN3VPWTVXSERvcUlLZjFGbHcyU25VLVVQUzdfdER2dm9l",
+    "eU9rWlhCdUctNjNNN2o2N016a2lMdGs5VzlyTWVMTWd0RjBSbGtpZVhWcEhlcHNPSWN4YTg0MUhra2pOSk9aR3pXbWdvVVEx",
+    "NTR4T2tTVHl5RENxcE0zWDlNcWZlckR3YURDTWNFaW4xNW11dXJ4VGJZa29zRFdxZ29RZjdYM1BMcFE4aVlHdXBqZG84b0lh",
+    "SDZFdUFobklseWJWRkhSM0IyR2R4MzBTanZBd21wOTVPZXR1SVQ0QWJKTmo4X0MwTjlIMVpFZDN1MWVqTTdLS1NXb2pBVEh2",
+    "Nl83TEpWcVFUNmhQSGRXNzliODBSODFfSGc2MzFxd2hMM2FpQ2NFbzMyNlNhN1VycWJTNWtfanNyUVdDZkhUVHJnbkpYYWJR",
+    "eG1IYjZLNVVLd3RGNktDSi1ZVnNqRzlWZEdwQ3pobFQ0MUd6ckxHV0FrT08xX2F6bk9Kdk10UjJRMDljOGJqV29hRWZ5dkpx",
+    "REZZb0VOZVgtUUFXc1M3dERqalBkdHY1OHRLMHhkUkJjdlc1TDZYMThBbzluOWp5bldVenlGZGZGd1pjd2lSZ0FfcVE4T1JI",
+    "OXRZaV91NUU0Qm5KNlRNN2NzbDBjX1B6UEZpZW9rbmhHN0VPc3duZDlMdFBhWHQ2VVZvc1l2cjVoWWZqd3pmVUVvNFlZNVdk",
+    "MXVxR3lITmFLY1FjSGNrYjRrdlFpMnY1RThJcXFETTdrQk9uWVNvSzRpTlBBUldLZFJmWkRSdmpJVC1VYW5FOHBZQk9vLVl1",
+    "TzdsTEI0RzlUMFNsc25zUW02RlltTkVuTkRoeEVCS1pZZ3RwdHZyTGF2dnFvTkpCbkduNkJ4RG9rM3hZWVU0OGt1aDl6UlJo",
+    "LVZMRkE1RlRoa0tHSWRJeld4UWVPNUVJSE9kN0lhZHNnb3hYTUNkVWVuU1lHa1dpV29hSVZjV2VQcGZDVFY1WnU0OGpaUVZB",
+    "UTF2dmI5VTBnZkxvRFFjZGZwR3AxbVFjRzUyWHNtSy01YldjRXdMdnBrMmJmdU1NNEY5d3VHamg2WUlITXZmT1BtYmFMYWQt",
+    "RHZsazRxbnF0SVhDSzllMXQwVmVMMWpWU0tlX0Jrdm9hOVNSWldHdVVGYXNMcGVGZzJiQTEyTkdleTZmc2VXWDVhSGFaWUwy",
+    "dDU2Q3R6cVhSSEdLSVZVTGFNdlF4cDJCcExFU21GSGtYUU1LY1dMdHBIR1NzNHYwVUxYd3VacFBuQzcwWXpkNkxpOGhfZXAt",
+    "a1RZeHZIaV9UUWY4Uy10S0N5Nk5aV3hqOUhmYy11Q3Z0ekRQUG8yTGJYYnRNRExDY291OFA4X2FWZDdRekpCSDBRNWJtOUlz",
+    "cWktcXJJTlpKLVZuYWpzYkJ4aG1PVXRFeGlJMXBWWHN4X1labTRkaGhCOHdpN3VpZE1QTkJOYk43SUduZmZYdC0tS0gteTNI",
+    "QTgtdk1oZFhHQzZnTUxxalNFRUktQm5kbHZDYWpJa2lTT3ZpSHJOQlRkR2xkazAzb3pOMGpSV2Mwa0hacEN0bGNIQ0tfMS1T",
+    "STJVbUpDcTZyU0M2T0V5YkZHaERtWEdtOXpDREJkU1dtOUdNTEJVemZrbURPSWdYZHR0Y203UkRDZmI2eGtLSWwweExUN0V3",
+    "UVVpYVNxZzFXZk1PV2hkTDlYckNqTFRXMXVqWm1OYXNrZ2t6WmlFV1B2RVRYWGxWTmgxMXJVWTIwUT09"
+   ]
+  },
+  {
+   "path": "secrets/.airspace.session",
+   "mode": "0600",
+   "sha256": "f3f71338630c08a9b9bf837ded307f76957df6d32510b9d4e0147fe3f9e0105f",
+   "base64": [
+    "eyJvcGVuZWRfYXQiOiAxNzY3MjI5OTgwLjAsICJ0aW1lb3V0IjogMTgwMCwgInBpZCI6IDQyNDIsICJhdXRoX21vZGUiOiAi",
+    "cGFzc3dvcmRfb25seSJ9"
+   ]
+  },
+  {
+   "path": "secrets/.login_attempts.dat",
+   "mode": "0600",
+   "sha256": "0fc7e2cc6ba98fd6fd67943116e6f5432defd51c26525700e379d544b24362d2",
+   "base64": [
+    "ewogICIwMjowMDowMDowMDowMDowMSI6IHsKICAgICJtYWNoaW5lX2luZm8iOiB7CiAgICAgICJob3N0bmFtZSI6ICJmaXh0",
+    "dXJlLWhvc3QiLAogICAgICAib3NfaW5mbyI6ICJEYXJ3aW4gMjcuMi4wIiwKICAgICAgIm1hY19hZGRyZXNzIjogIjAyOjAw",
+    "OjAwOjAwOjAwOjAxIiwKICAgICAgInVzZXJuYW1lIjogImZpeHR1cmUtdXNlciIsCiAgICAgICJ0aW1lIjogIjIwMjYtMDEt",
+    "MDEgMDE6MTM6MDAiCiAgICB9LAogICAgImZhaWxlZF9hdHRlbXB0cyI6IDAsCiAgICAicHJldmlvdXNfbG9ja291dHMiOiAw",
+    "LAogICAgImxhc3RfYXR0ZW1wdCI6ICIyMDI2LTAxLTAxIDAxOjEzOjAwIgogIH0KfQ=="
+   ]
+  },
+  {
+   "path": "secrets/.master_hash.enc",
+   "mode": "0600",
+   "sha256": "a919ea895bb2f943be7deeae0887c38af290831eb55d624340bb11501d7886b0",
+   "base64": [
+    "Z0FBQUFBQnBWYmtBWXdQd1M1dVZBZDFvMHhhVmZ3MVdGcFdMYW1qY2NwaEJ5cmgzeFVjR0E3RFczSThrSkRTaW45d1dGRzZQ",
+    "cHhkbzBHZHdSbVprZmozTmg3NFJPTXJ2ZUw4aUFobEhSdndTbExPUWNQZ1M0emZ3VmRlb21CdXBrdjZrSXd6ODhwZVQtQUd2",
+    "b1NXQzN4bzJSdXBFVElJWG9ST3JLQ3l6UGd4MkNQRmJoeG5vU05nPQ=="
+   ]
+  },
+  {
+   "path": "secrets/.master_user.enc",
+   "mode": "0600",
+   "sha256": "e85ae7b0ff0e397e7896ee51fd9337d4fd3003245bde842b660d39ca9e173be6",
+   "base64": [
+    "Z0FBQUFBQnBWYmtBNzdXNTU0NEVxUXNsOGpjbVNWR3FDMTFsRk94TDRacG9Hb1ZLbGxjdzc3ZzJvQ1RFdXVxYTRNQl9PTWJV",
+    "Q0Y0OFd4YkdWUkxPYWlLMzJYUG1tN2NBVGc9PQ=="
+   ]
+  },
+  {
+   "path": "secrets/.passwords.enc",
+   "mode": "0600",
+   "sha256": "6bf61cad9ab63788738e387b68da8807d6b324555f1c45fbd6f6cff16fd71d7b",
+   "base64": [
+    "Z0FBQUFBQnBWY3BZWXJkOXA3dlhJMGE1TVlTbjNwSXl4VEhCTlhsWW0yU2VUdG9yVTFkb1BQczd3Ym1wMjF3ZWpIX1pta3dJ",
+    "YlFUZnpNYm02NWdKTVdVYi0xUE0xVENpQ2lRSmRuZHZVY0s1cV9TSUlRR0hIbENSMDc5N2FCOGxLbVRWOExQU3k0QjJxc1Zq",
+    "MFRGYXRuRjFWdWlRQTdxOExJWGplUFlNekdaM0YxVWE3TzdISEJEUVRqZmVGRW02R2cwQlhPem1oRGZITGJ5Tk5TMGhqMnlZ",
+    "X1lWU0VSa0dHYTA4RGFsWFJRM21JYmVLemo2ZktHb1JOcnkwYzNjd1VvZEtrU2FlVlFhNVVNQlZKZHZiblQ5Y0JzcFc2NXhh",
+    "c0llVkFwYlFWblQzR2xuRkY0MnlmU3g4VzZ4WWJITTNsaHF6ZXlJZGJzV2w2dHM5NlJ3bzJuR3VIdTBaQmxSVEZmYXFWR216",
+    "VTI3VlUxU0hzUm1vMlpudFkzRy1KSXN4ZURJREZKWTFZdm9rTURnaFZnWWxETHFCWkVULUsxM2Zhb0JNVHZGNTRSMWJxSTRw",
+    "T2h1YXlyMHF4c1ZWNFhqeGJlbkFLRDFoRGN0cm5ZMkJ3WU1wajlCRkJVMngxQlk3ZXpPeHU3Q3FtYzU3MTdfUG9Nd3VSZVVS",
+    "YUVDdXJqTWJVcVNGUUlFdDJFa0xWOUEzNm8tazNrTVFzT2I0WXVNS0d0LU5QUjE0SE4xeG5LcVRwdC1ncWpwcHZrenpxY3Nj",
+    "Yk1SUnd2R00yLUk1ODFCM0k0TEllN2FIV2RTVnBHM2FTMWQ1SzZpa25EOTRpLVI3MTRGWlNpYWZGdnhBSm5ZRTB6MFF5NXl5",
+    "dWZrXzhrWWVoMkJDOXlDNjZKV1Vma0JLLW50WkN2NXU4VU1rTlFCRjhlYTJzUmZfZW1HYzZVVVdzeFVSQjlrY0kyWWJGaW1B",
+    "alJRMWVpQnlMZFNiSVBwclNiNmRaNUljVE12RWZSQ0gwcm5rQW5oNm1GVXAtQmxKQ0N1empkbnRXbWx5cHd4TWlFa1k2d1JL",
+    "bE9zVEh4cFRiRXlUTnBDZUFWaldlRFhtc0tsSy1OTUdVZWxWZzl1dXNlSXlXN3NhUWhKanlLM3haN0lCWWhCYjV5Sm5meVV4",
+    "VTdqc1RQWlZEQm9NXzI2R3J1RDBXbTU0OTlzNnlyektrT0ppZVprQlRTZUR0akhoWDFpWFl6RmI5Y0xTa3c4THV4TkV3UERt",
+    "T2xjRENoRW5kMUh0Wno2N24xeFMwcWJaSlJyUlRSQ091SE9FdU1RUm1NOUZnYmV2cjNLWHFsNldhNEN5NWhGMEx2MURuOUEy",
+    "amQ5OXVHbHdrTVlfdFd6OUtvNTVNUmgtd2FhY1J3cWtaY1B1Z3JmaVduTUk1amhFcmhSLWw0RlB0MmNYOUw4NDNoN1dfWmxH",
+    "MHplRm5ERnFCVUtHS0kwZElTeERfU3JLTTN1TFVqRGQ3V0R0ZXZ6YjIzSHJlR1RUMzB4UG5CWGFoSzBLaklSTHE4aXVabzdI",
+    "ZkNFelRHdUJZWmlVRW44aDZPSXktTDVpRGdjOUgtS1BYbWVtN0wwelJReHgzTjJ3YlBkTXFjZHZFdm9yb1lGTklWZDNrdGRl",
+    "U1FuMVIzVHdicFM0TEhjVjZIb2UzSUs0bTYzU1I5VkhTdFBMLV95S19FcVhpTWNIb29CcnFfRk45eXQ4RWc1Rm51WVRPa0Zu",
+    "WktDc2FnRWlVNnRETnVlVmxvTy1sWlg0azkwUWV3NGxaMWVkOUpkS3Y4MkhKNjdVbnFsSjE1bF84UEpvZDAtSHRCNUJENklK",
+    "cVNaZi1EMTR5c0NRaFFUeENLTkxMUzZCLTR3VkZlZmZrbzIzc3ZQbWpkbW1XemRmbU43Rk16dGl4cXBSQ1JmaVl1SE9FNzVF",
+    "S1Nib1lEQWVfWmlXX3NBdXNBbGh2LVVVTkVlTWpYUHQyRkd0elNjTmVaREx2YXhjMzNCeVVpT3dWODItWXA0UkkyQ2dBYVRM",
+    "WGZfX0FRaU40eFNBNkh5YVZrTUhhRWJIa3ZSYzJ0RTNMeFlPWHdFT2tMY2xRbDlVMXIwRlNqN2RfTGxHQ01BajllNlJwOThG",
+    "MnJJeFpDS1FBeUIxUE9rV3lIbC1mTXVHZzd3ZVdkR3ZOTUlHX3lLbVh2ZEVCSTJXRzRubHI4UDBEUVNFcFp2eE1HTUVJaUVa",
+    "akdqdE1JRVBCS0tFRU5oUk1ibGNkb0FWMWNvOEpHN2lxeVY1OUE5UXFnZVE4bDVuZHE5S2o0aExDdjEyVVo4LTg1MkJlam5D",
+    "R3c5dl8xWkxfTGswVy1UY0YyNmtWOE5Sd1BSYS0wTml3bEFTQW54cnZpaHhOb29Kdm5BSzF6cFJCN3RXUmVnSENMLW5uTm5O",
+    "Ym9sUzNIVVNhekZ0Wm83aWpZS0VQOU5BdXNuTUZZeU5xVDI0Ti1tNXNnM0NpcVYxbzgwNkhlTW5SakctdWVtbXRlZjRJX1hr",
+    "QURoMDhKbmdhbmxpY3NKajNhMFpCRkQtdGdSZ0NkbG9JRnZTb2xOLWduSUN3UDNaTEpvY3Q0QmVRTFFfMVdKczZSdFlXbUhz",
+    "NmRVYkpvT05SSGhncXRXMHFrU016RWxLcjBuWi1ycTEybmdYYkR1SmRJRW9mOWdKRnVFTzhHMFVrdnQwQ2hHaEhlVk1hSXl3",
+    "c2pXQWhGRXpqeUlQX25VS1VPNUpVV0tYcVVaN3A4UnVrVVYyRWd2dXZFS0tVX0RTbC1HVU51aEFBanRsOVIwTXN5NGUzZU4y",
+    "Ui1QRE01clhNNmt0akNmTUlvaDlBX3piWFRsODNYWVZyc0t0emVnX0t2Wl9ENmRBU0RFMWdKOUtnZUROcDZBSzZLdXgzcnNU",
+    "T1pRSVliMGR4dHc0LURvR25MYUNCanJPa1IyWHkwUnVSWlhGaFdYODZ6STQxcUtmZ2MtOVlVZE9fU2QtMEJMS3c1emlpSzJr",
+    "QmNtTkZYVm1mYnJXbkNiNzFJeU1JWm50VlBaYldZREluWFc3eFAtTHo5OWxVcDRzQXJ6UkN2VlZ4cnlJYmdyaUpzY25ONnRG",
+    "T0xXSUZQTkY4WXNjaks0dmdEQno3dkNoSFV3dm1uRUpFWW9Ib0ZpdUZ1dko0dVp5WlZ6UW9aX1psbHhPX21wMWVDdzd2NzBq",
+    "M0o0N2NDcEd0a1MwaGhiYWJvNC0wLWtJNS04UjlSN3ZNWHp0Rjg2UmllbFFJMWxQZ1A4UG13WG5ER3liUDc3dDJYRldFNFlF",
+    "TmdJY0RNMEw1aDJLcXRwWHJrS2VwU00waDNMSnJSVGZydW8xYVp3TVNCV3ZmSWs1Vk8yR3pBakgzYldRUUVyS2dsVWFQVFo1",
+    "UnQxVDlZQzN6RTlxejY0VzR1LWlJRWxKLUJ1MzR5VGFUaWNaWkxnak1tNGNTQ2VZLWNPN1dLUmNVazFjM0N4allzdTNMY0JE",
+    "dFdLMUNIT0gtaXNzeU04azJZamtQMzBvZVJ1cVZxZUtCWDdXWEI3ZFRtOFVuR0RoMzF3a1dRTWlZcTI4WFhTRTFOZzVVLS0z",
+    "bVVqbFBkMDRQb1VUZklmbjFlREg5S2wwV25aUFI5SlRuZkV4NHVYYXBBZzhqc0lHVnFtY1k0YWZLTTd2cDFwUnUtQWlvWUgw",
+    "dDA4WjMtR3BOSjRQNW1Ha3J6SHc5TU1YX2p3UUcyQ2h6M3JEZFUxemZhMDdZeGNFdGkyMHhySmRTVGhyR1dkYnJCdXRjd1B3",
+    "ZTdkcXloa0Zjbnh1eGNOek9TQklRdUd6QzlYQ2drdzJuZWR4R2h6d1h6VnQ1OE5UeHRJWGVCVndLOF9mUlBFM0hycDk0WGdk",
+    "OHYwN0s2a3lXb3daZTA2Z0VlQ2EtUDljY242UHhDT3JhYjJyOXVmS3dndjhSUG1mMk5saWVqYVpYN1prLUhjdVZMekVmVXFn",
+    "aVlrNEswS0ZQQVVXV0dHdlNLU3lPeXNLeGhHTUJyY01NdnMtREMyRUxRNWNRNXoyQ0p4dzJ1N3JGWU5fVTNIbDBlajlTZkFL",
+    "VFFzaE95MkNPZzdjV0RqNzNQcGxXcjd3WWszVmxZWnZGd2MxODYxZmhMXzZXeGxaNmJFbXJPSl9hbVNjby1YbGFRZEUwT3lX",
+    "dWFiWXFYY0ZoWkc3dUh1aXpVa2gxVHlDVkhaMDVnMWlrbHNIVkI1RExRQ3lEZThWVHl6TGdjRHR3azhGM0pqa2I0RDdRQ3Nm",
+    "REtZc3FsbFVqVWNlcFZmaTA4RENNM2s3a2didmV2RnFDV0xId2U5UnlBeWQwc1Vwc213NE4xa2JUOHJBekpUcWs0U09BeUN3",
+    "YU1ZbFdGU05qN2RRYjMyYVpYWUxvMDlRWlJGODlQVkUtNkdOaHgtcFQ2WUVNb0QwUHNnc2ZyTUdjMFlEenQ0MGZOb2U5VTZj",
+    "UzIxbWFOYTF0bndxMlM3VDdOb2w3QjNROTFMeWF0d1lBSm0wb2UzaE5DWnpnYmkzUEE9PQ=="
+   ]
+  },
+  {
+   "path": "secrets/salt.bin",
+   "mode": "0600",
+   "sha256": "4e37f4d30dd98af20d9b4f87498310d25ab05adce51aceeb49d1184186039f48",
+   "base64": [
+    "SuCYparCAkqAV6SsTrHaAA=="
+   ]
+  }
+ ]
+}

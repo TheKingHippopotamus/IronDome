@@ -1,0 +1,16 @@
+# Lint configuration. `ruff check src tests` must pass before anything ships.
+target-version = "py39"
+line-length = 120
+src = ["src", "tests"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "S"]
+ignore = [
+    "S603",  # subprocess calls are deliberate; arguments are never built from a shell string
+]
+
+[lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108", "S311", "S607"]
+
+[lint.isort]
+known-first-party = ["irondome"]

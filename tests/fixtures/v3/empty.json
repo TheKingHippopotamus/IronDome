@@ -1,0 +1,69 @@
+{
+ "format": "irondome-legacy-vault-fixture",
+ "version": 1,
+ "name": "empty",
+ "about": "3.2.2, set up and never used: no .passwords.enc at all.",
+ "written_by": {
+  "irondome": "3.2.2",
+  "commit": "43b7d67",
+  "driver": "make_legacy_vault.py"
+ },
+ "mode": "password_only",
+ "kdf": "2.0.0-3.2.2",
+ "layout": "secrets",
+ "machine_id": "fixture-user@fixture-host",
+ "master_username": "fixture-admin",
+ "master_password": "Correct-Horse-Battery-9",
+ "stored_username": "fixture-admin",
+ "vault_key": "qmIx-qoraxqi5Py4YjoCnrwggZ1kE-D-oY2aCeA_g_A=",
+ "keyring": {
+  "auth_mode": "password_only"
+ },
+ "recovery_key": null,
+ "entries": [],
+ "directories": [
+  {
+   "path": "secrets",
+   "mode": "0700"
+  }
+ ],
+ "files": [
+  {
+   "path": "password_manager.log",
+   "mode": "0600",
+   "sha256": "47dec93d47bd67f52642846cbc393b491da3a0277a0c5e5f689e3b266d7d9e9e",
+   "base64": [
+    "MjAyNi0wMS0wMSAwMDowMDowMCwwMDAgLSBJTkZPIC0gQXV0aCBtb2RlICdwYXNzd29yZF9vbmx5JyBzdG9yZWQgaW4gT1Mg",
+    "a2V5Y2hhaW4uCjIwMjYtMDEtMDEgMDA6MDA6MDAsMDAwIC0gSU5GTyAtIElyb25Eb21lIGluaXRpYWxpemVkLiBEYXRhIGRp",
+    "cmVjdG9yeTogL2hvbWUvZml4dHVyZS11c2VyLy5wYXNzd29yZF9tYW5hZ2VyCg=="
+   ]
+  },
+  {
+   "path": "secrets/.master_hash.enc",
+   "mode": "0600",
+   "sha256": "a919ea895bb2f943be7deeae0887c38af290831eb55d624340bb11501d7886b0",
+   "base64": [
+    "Z0FBQUFBQnBWYmtBWXdQd1M1dVZBZDFvMHhhVmZ3MVdGcFdMYW1qY2NwaEJ5cmgzeFVjR0E3RFczSThrSkRTaW45d1dGRzZQ",
+    "cHhkbzBHZHdSbVprZmozTmg3NFJPTXJ2ZUw4aUFobEhSdndTbExPUWNQZ1M0emZ3VmRlb21CdXBrdjZrSXd6ODhwZVQtQUd2",
+    "b1NXQzN4bzJSdXBFVElJWG9ST3JLQ3l6UGd4MkNQRmJoeG5vU05nPQ=="
+   ]
+  },
+  {
+   "path": "secrets/.master_user.enc",
+   "mode": "0600",
+   "sha256": "e85ae7b0ff0e397e7896ee51fd9337d4fd3003245bde842b660d39ca9e173be6",
+   "base64": [
+    "Z0FBQUFBQnBWYmtBNzdXNTU0NEVxUXNsOGpjbVNWR3FDMTFsRk94TDRacG9Hb1ZLbGxjdzc3ZzJvQ1RFdXVxYTRNQl9PTWJV",
+    "Q0Y0OFd4YkdWUkxPYWlLMzJYUG1tN2NBVGc9PQ=="
+   ]
+  },
+  {
+   "path": "secrets/salt.bin",
+   "mode": "0600",
+   "sha256": "4e37f4d30dd98af20d9b4f87498310d25ab05adce51aceeb49d1184186039f48",
+   "base64": [
+    "SuCYparCAkqAV6SsTrHaAA=="
+   ]
+  }
+ ]
+}

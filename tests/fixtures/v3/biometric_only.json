@@ -1,0 +1,179 @@
+{
+ "format": "irondome-legacy-vault-fixture",
+ "version": 1,
+ "name": "biometric_only",
+ "about": "3.2.2, no master password: the vault key is the keyring's master_key entry.",
+ "written_by": {
+  "irondome": "3.2.2",
+  "commit": "43b7d67",
+  "driver": "make_legacy_vault.py"
+ },
+ "mode": "biometric_only",
+ "kdf": "2.0.0-3.2.2",
+ "layout": "secrets",
+ "machine_id": "fixture-user@fixture-host",
+ "master_username": null,
+ "master_password": null,
+ "stored_username": "bio_touch_id",
+ "vault_key": "rnuzJjrYODuyJ507lcA2JAxE79ykW8JZuasnmIfDDKU=",
+ "keyring": {
+  "auth_mode": "biometric_only",
+  "master_key": "cm51ekpqcllPRHV5SjUwN2xjQTJKQXhFNzl5a1c4Slp1YXNubUlmRERLVT0=",
+  "recovery_hash": "3df104a868e4bf2488559fb5b924ce54ae62d47813c693a790cb2f693b0c343e"
+ },
+ "recovery_key": "0798-FC98-D8D2-28C7-87BA-6BEB",
+ "entries": [
+  {
+   "username": "alice@example.com",
+   "website": "github.com",
+   "password": "Gh!tHub-Pa55-0001",
+   "notes": "",
+   "created_at": "2026-01-01 00:01:00"
+  },
+  {
+   "username": "alice",
+   "website": "https://mail.example.org/login",
+   "password": "c0rrect horse battery staple",
+   "notes": "2FA: authenticator app",
+   "created_at": "2026-01-01 00:02:00"
+  },
+  {
+   "username": "root",
+   "website": "nas.local",
+   "password": "p@ss\"w\\ord\u00e9\u05e9-rotated",
+   "notes": "unicode + quotes \u2014 \u05e9\u05dc\u05d5\u05dd \ud83d\udd12\nsecond line",
+   "created_at": "2026-01-01 00:03:00",
+   "updated_at": "2026-01-01 01:05:00"
+  }
+ ],
+ "directories": [
+  {
+   "path": "backups",
+   "mode": "0700"
+  },
+  {
+   "path": "secrets",
+   "mode": "0700"
+  }
+ ],
+ "files": [
+  {
+   "path": "password_manager.log",
+   "mode": "0600",
+   "sha256": "38abc0bd23a5b5572dd6c675c55c8074d1b652f07581b1ca0c1cd0bb6edf3269",
+   "base64": [
+    "MjAyNi0wMS0wMSAwMDowMDowMCwwMDAgLSBJTkZPIC0gTWFzdGVyIGtleSBzdG9yZWQgaW4gT1Mga2V5Y2hhaW4uCjIwMjYt",
+    "MDEtMDEgMDA6MDA6MDAsMDAwIC0gSU5GTyAtIEF1dGggbW9kZSAnYmlvbWV0cmljX29ubHknIHN0b3JlZCBpbiBPUyBrZXlj",
+    "aGFpbi4KMjAyNi0wMS0wMSAwMDowMDowMCwwMDAgLSBJTkZPIC0gUmVjb3Zlcnkga2V5IGhhc2ggc3RvcmVkIGluIE9TIGtl",
+    "eWNoYWluLgoyMDI2LTAxLTAxIDAwOjAwOjAwLDAwMCAtIElORk8gLSBJcm9uRG9tZSBpbml0aWFsaXplZC4gRGF0YSBkaXJl",
+    "Y3Rvcnk6IC9ob21lL2ZpeHR1cmUtdXNlci8ucGFzc3dvcmRfbWFuYWdlcgoyMDI2LTAxLTAxIDAwOjAxOjAwLDAwMCAtIElO",
+    "Rk8gLSBTdG9yZWQgYnVua2VyIGZvciBhbGljZUBleGFtcGxlLmNvbSBhdCBnaXRodWIuY29tCjIwMjYtMDEtMDEgMDA6MDI6",
+    "MDAsMDAwIC0gSU5GTyAtIFN0b3JlZCBidW5rZXIgZm9yIGFsaWNlIGF0IGh0dHBzOi8vbWFpbC5leGFtcGxlLm9yZy9sb2dp",
+    "bgoyMDI2LTAxLTAxIDAwOjAzOjAwLDAwMCAtIElORk8gLSBTdG9yZWQgYnVua2VyIGZvciByb290IGF0IG5hcy5sb2NhbAoy",
+    "MDI2LTAxLTAxIDAwOjA0OjAwLDAwMCAtIElORk8gLSBDcmVhdGVkIGJhY2t1cHMgZGlyZWN0b3J5OiAvaG9tZS9maXh0dXJl",
+    "LXVzZXIvLnBhc3N3b3JkX21hbmFnZXIvYmFja3VwcwoyMDI2LTAxLTAxIDAwOjA0OjAwLDAwMCAtIElORk8gLSBEb21lIGZv",
+    "cnRpZmllZCBhdDogL2hvbWUvZml4dHVyZS11c2VyLy5wYXNzd29yZF9tYW5hZ2VyL2JhY2t1cHMvLnBhc3N3b3Jkc19iYWNr",
+    "dXBfMjAyNjAxMDEtMDAwNDAwLmVuYwoyMDI2LTAxLTAxIDAxOjA0OjAwLDAwMCAtIElORk8gLSBTdWNjZXNzZnVsIGxvZ2lu",
+    "IGZyb20gZml4dHVyZS1ob3N0CjIwMjYtMDEtMDEgMDE6MDU6MDAsMDAwIC0gSU5GTyAtIFVwZGF0ZWQgZW50cnkgZm9yIHJv",
+    "b3QgYXQgbmFzLmxvY2FsCg=="
+   ]
+  },
+  {
+   "path": "settings.json",
+   "mode": "0600",
+   "sha256": "4811044867afa6b113f6da537833a30ec40afbd6a906427b01d12ea574199657",
+   "base64": [
+    "ewogICJwYXNzd29yZF9sZW5ndGgiOiAyNCwKICAidXNlX3NwZWNpYWxfY2hhcnMiOiB0cnVlLAogICJ1c2VfdXBwZXJjYXNl",
+    "IjogdHJ1ZSwKICAidXNlX2RpZ2l0cyI6IHRydWUsCiAgInNlc3Npb25fdGltZW91dCI6IDE4MDAsCiAgImF1dG9fY29weV9j",
+    "bGlwYm9hcmQiOiBmYWxzZSwKICAic2hvd19zdHJlbmd0aCI6IHRydWUKfQ=="
+   ]
+  },
+  {
+   "path": "backups/.passwords_backup_20260101-000400.enc",
+   "mode": "0600",
+   "sha256": "df49f47c900fd014accb844a3f34da0c5499cd8c0ad4848d6c7b664354b530f8",
+   "base64": [
+    "Z0FBQUFBQnBWYm0wMUhseTF5c1dqNU9qbVc3eHlLT2lLdVVKdXNFWnhDelBfQmd1MUVGMnFMdjV5MjNFeEdTMDBKaDdtVjh4",
+    "WVdMN1d4Wm1KYy1KenNyb3hRaFBneDdIQ3JFMmMyanlLNjhNNXVKTnpYMzVLZE4tWDNfR0pLUGdPZTRlRk1vNjF3dUh6UFcz",
+    "NF90T0d6Q3d5Q3NkRGgyaTRhQXVzaVhSVzdubzhzS2lJb3BXWFJZRHNKY0hUWENQSFloc3JCWE1tMVpxRTRsd05FakpEemlz",
+    "a3RmMjdoRDZkNWx0aldzNzByaFhOZHlNeGNPTzFQejZNUEpKcm55aUdLZlFKS3JrUmhfZDJpV3dGMWwweE1JSnpqSDd2NW96",
+    "M0pWWnJhMnRKT3VWM2xBeEFjQ2tFczZxUmVmREU1Y1FZTnJlSDlrM245Y3hyZm84R0pNUS1pNi1DNF96QjB0aWJkcHVCaE04",
+    "UHVwSmpUamljUDVqc3ByUXNiVDdyWnFWYUNPaHdvajNFRUZTQURkZ0xaSTN0UmpFMng5OWJqRHpfS3o1VWRXNFpsbGtfZ0pT",
+    "NzNhU05WUFI3Rnp0WTQ5dms5VWtxR3VqbFV4dnlqdGZiRlptaUpoclpNa2ZfVUx5WVlfeFJ1SXRuc2JjWDVLWG9JOHA2Tm1T",
+    "WUxZd29VTVhib05ycVdrMGNXYjJFME00OUctZGRDRVFxbjBZUWxIRUo2ZXZTaXY2UFZFWW1tZDRUQ25DSExBYlJhaWpQWm55",
+    "eDBJUF9QbzVOZUh4M3FkRmlVeGpRNzRkTmN4RUs1clVUSTdTeEdWNDQyWnFLOVg4NV90bUhEWEhGb0VmZmtkZGRmRWh4YlBr",
+    "cUxWemczSlQ0WVZZeFdEMVdob0hMeTZieHF5UDJRM0xFM1N0Slp5TnVhOE9GS2FmRjJ5blRDeF9PZ09xV1dDdVlfaXN3eXl4",
+    "RVl1bjMtQTlhNUliVlJ6Y21FZjh5a2QySHJHdG9NbzJUNi02QnNTSWNhUnVYcEp2UHZiZDMwdmEtWWt6cHBzeVRaLTJ4ZFRk",
+    "Vm9Kc2ExaE9oQT09"
+   ]
+  },
+  {
+   "path": "secrets/.airspace.session",
+   "mode": "0600",
+   "sha256": "f7d168b56aa26e37704b3e132d16f31ebe2da500c71d38cc874d4d885306531f",
+   "base64": [
+    "eyJvcGVuZWRfYXQiOiAxNzY3MjI5NDQwLjAsICJ0aW1lb3V0IjogMTgwMCwgInBpZCI6IDQyNDIsICJhdXRoX21vZGUiOiAi",
+    "YmlvbWV0cmljX29ubHkifQ=="
+   ]
+  },
+  {
+   "path": "secrets/.login_attempts.dat",
+   "mode": "0600",
+   "sha256": "f898f18e8614f1d2fd4f6b69a43164b60d3b6638f6e3936b86342d8bf3fb88f7",
+   "base64": [
+    "ewogICIwMjowMDowMDowMDowMDowMSI6IHsKICAgICJtYWNoaW5lX2luZm8iOiB7CiAgICAgICJob3N0bmFtZSI6ICJmaXh0",
+    "dXJlLWhvc3QiLAogICAgICAib3NfaW5mbyI6ICJEYXJ3aW4gMjcuMi4wIiwKICAgICAgIm1hY19hZGRyZXNzIjogIjAyOjAw",
+    "OjAwOjAwOjAwOjAxIiwKICAgICAgInVzZXJuYW1lIjogImZpeHR1cmUtdXNlciIsCiAgICAgICJ0aW1lIjogIjIwMjYtMDEt",
+    "MDEgMDE6MDQ6MDAiCiAgICB9LAogICAgImZhaWxlZF9hdHRlbXB0cyI6IDAsCiAgICAicHJldmlvdXNfbG9ja291dHMiOiAw",
+    "LAogICAgImxhc3RfYXR0ZW1wdCI6ICIyMDI2LTAxLTAxIDAxOjA0OjAwIgogIH0KfQ=="
+   ]
+  },
+  {
+   "path": "secrets/.master_hash.enc",
+   "mode": "0600",
+   "sha256": "a607bf638febf885bbe35876428cfe17c4530e562850eb5dc2ee0dbc3c32c82d",
+   "base64": [
+    "Z0FBQUFBQnBWYmtBLTRCMXJGM3J3ZXNXWU1uMHVKclBqNmljc0xFN1VkWDdUYV9fM1R4YkprR29IYktUT1V1UTBRWktHYWgy",
+    "RU9KUU1pNHpDSzBGQUVIanI0SmlkNTRDTVIxN2RtTWFJaDJsQ1JRZnFISldKcV9WQjFwaGhacG9ENXhvRDFFTElfWFBvdmdp",
+    "TWR5U2lTcWg0YjB1dXJiZnhxaUZYdXlraFVEX0hSR3dYNFhBT1NNPQ=="
+   ]
+  },
+  {
+   "path": "secrets/.master_user.enc",
+   "mode": "0600",
+   "sha256": "28b5aa10b2e698c285ce609a6815df6c1341fd9cf5f30e0a0f5d803b66ddaab8",
+   "base64": [
+    "Z0FBQUFBQnBWYmtBaFUzeVhWUDFKdjRNcGZudGxUZU43VGRNZXJWOEdaMVRWTlFrTVRpWF9ZNldLLXRtbzFuVG5YNzQ4Y0tJ",
+    "X3RqTldpTXBkOXhPWVNXUG92eWRRanZ2aXc9PQ=="
+   ]
+  },
+  {
+   "path": "secrets/.passwords.enc",
+   "mode": "0600",
+   "sha256": "7036447210a52d8a3b0de086fd83c6cd12464eece27f13ab9246e2faebcd9176",
+   "base64": [
+    "Z0FBQUFBQnBWY2c4alNYV1ZKdDZUWmJRbG1GeTl5MEhzZzVHOWV6RndGblF0Qzc5d2NycS1DR2JGRVE5emw3YVJQcmJjd1RG",
+    "UHd5SEhnWEhLUlNCV0hSVkZZUzBRaF9vajR5TlUwYVJxM2RNTGh6X1ZTbXBabU9CVVFkVjc0OEZ1azgwMzU3WjZKdG5zSzF3",
+    "NWg3TGdYX2pEMHREY2FRRFgwbzVUUXJORURUdG5WNnloNkRxdzZtZUwyVlVhQ2szLU55dHZRMGpDWXFDWnFXRjRRSG9sNlR0",
+    "UXY2QWZjaHlTQ1Bwc2N0aTh2TFVzQS1sV2dKdm1RTmdLSzNKOHdQSGZDUzhqNDV5VWNabFcxZFZjQXBaeDFzUHhMZWlSQURj",
+    "Vjg2Z2Z0OC0wQjdEczBLSGU3X0lPWWRLZWZhdDlFU1RrYWlPdkVzUWtsWW1KTldyNWl6VmNWbEhKV0FJeXFNOFd1UVhOaGVl",
+    "d04xanJ6dXhUcFRUVWhacDY1TEZWZ3owMFNZRW1tN2ZBajVLdmJDbE9wMEd2NE9KU052MWxwNUUwSDdGQ0J5WnUzbjdLaU5S",
+    "d0FGSFU5UGV3b2VHckduaXZzOVAtcXpmTUFWbExXbTFZaDhVSU84ZUhzcHRqTlJTUzlXbTBvbU9tRUNOVFpTUW9ZQWlQRWhW",
+    "MlRuZkZTUEZGV3diWWE3WFNOZ3FEU0RxMGJiUFFFZjFBZk1pTGdWUk1GV1doZHBneGtzUFdraG5iUW5pbUNmRGkwY0p5RkxP",
+    "cXhrbTN2cGkwQzRoZFNHUGVIS2hoWVdrd01WRFc2WHlVWHJxSEppUmlkMzRQLTNPek9VQ24zSkZkQ3FSQjhOR3ZpLVdiNjhK",
+    "bnZrU3JsbHBnaDVLTzhHSTRzaC1NczRBcGNRQzA2Y2hIQk5URmNUSVZzRTlveGF0d0toUkdFckZsTmtnUHdrU3g0NVVlQTBY",
+    "VEhkdzYxUXVIbks3eWZFUVNILVJrbXlnZkdjdVN6OEJJWVBWOEhpalJDTml6MExlY3hCcXFacTJ4a1Jla1ZQZlRWLVdJZTZ1",
+    "aWJiTjk3bWp3b1FybnJ5OUVWSm40RmM3UldfdWJfZjRIY2tubTV4MVNhWk5CRjdhcF9hQjBCT0NuNzk5MEhxbDYyd1JUY0Vo",
+    "THc9PQ=="
+   ]
+  },
+  {
+   "path": "secrets/salt.bin",
+   "mode": "0600",
+   "sha256": "e223d8c1dec1ec1c639bb3ea41f3014644d6933021a4be014749bd827cf93574",
+   "base64": [
+    "n6CqoPfDD3s2Kc0dGvq8ow=="
+   ]
+  }
+ ]
+}

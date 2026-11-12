@@ -1,15 +1,21 @@
 include LICENSE
 include README.md
-include requirements.txt
-recursive-include password_manager *.py
+include CHANGELOG.md
+include SECURITY.md
+include ruff.toml
+recursive-include docs *.md
 
-# "The source is the specification" implies the tests come with the source.
-# The suite is unrunnable without conftest.py -- it holds the throwaway-HOME
-# and in-memory-keyring fixtures every test file asks for -- so the sdist
-# ships the whole directory, not a selection of it.
-recursive-include tests *.py
+# "The source is the specification": the sdist ships the tests that hold the
+# claims, their fixtures and the Linux harness. By file type, never `graft`: a
+# graft ships whatever else sits in a working tree (a .env, a test vault, a
+# cache). scripts/check.sh also refuses a build that holds a file git does not see.
+recursive-include tests *.py *.json *.md
+include tests/linux/Containerfile
+recursive-include scripts *.py *.sh
 
-exclude run.py
-recursive-exclude static *
-recursive-exclude * __pycache__
-recursive-exclude * *.py[cod]
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store
+# Local state and secrets, wherever they are, even with a shipped file type.
+global-exclude .env .env.* .envrc *.irondome *.state *.local.json .mcp.json
+global-exclude .claude/** .hypothesis/** .pytest_cache/** .mypy_cache/** .ruff_cache/** .venv/**

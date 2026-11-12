@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # A new release is not installed until it has been public for a week: most
+  # malicious package versions are caught and removed within days.
+  - package-ecosystem: uv
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+  # The two digest-pinned base images of the Linux test image. When the uv image
+  # moves, move `version:` of setup-uv in the workflows with it.
+  - package-ecosystem: docker
+    directory: "/tests/linux"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

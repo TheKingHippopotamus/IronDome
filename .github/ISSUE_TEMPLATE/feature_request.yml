@@ -1,0 +1,31 @@
+name: Feature request
+description: Suggest a change to IronDome. Not for security problems.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Security problem? Do not open an issue.** Report it privately: <https://github.com/TheKingHippopotamus/IronDome-Bunker/security/advisories/new>.
+        **Never paste a token, recovery key, password or bunker file here.** This issue is public.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what stops you today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should IronDome do? Sketch the command and its output if you can.
+    validations:
+      required: true
+
+  - type: textarea
+    id: promises
+    attributes:
+      label: Effect on what IronDome promises
+      description: Would this add, change or weaken a statement in [docs/CLAIMS.md](https://github.com/TheKingHippopotamus/IronDome-Bunker/blob/main/docs/CLAIMS.md), or need a new dependency or any network access? "None" is a fine answer.

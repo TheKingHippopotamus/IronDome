@@ -1,0 +1,110 @@
+name: Bug report
+description: IronDome does something it should not, or does not do something it should. Not for security problems.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste a session or grant token, a recovery key, a master password, a TOTP seed, or any file from a bunker (`vault.irondome`, `backups/`, `caps/`, `audit.log`). This issue is public. Editing it afterwards does not take a secret back: notification emails have already gone out.**
+        If one was posted anywhere, treat it as exposed: revoke the grant or end the session (`irondome lock --all`), and change the secret it protects.
+
+        **Security problem? Do not open an issue.** Report it privately: <https://github.com/TheKingHippopotamus/IronDome-Bunker/security/advisories/new> (see [SECURITY.md](https://github.com/TheKingHippopotamus/IronDome-Bunker/blob/main/SECURITY.md)). Anything that makes a statement in [docs/CLAIMS.md](https://github.com/TheKingHippopotamus/IronDome-Bunker/blob/main/docs/CLAIMS.md) false counts, whatever its severity.
+
+  - type: checkboxes
+    id: not-security
+    attributes:
+      label: Not a vulnerability
+      options:
+        - label: This does not make a statement in docs/CLAIMS.md false, let an agent exceed a grant, let a copy of the vault be opened without the device or the recovery key, or leave key material where the threat model says it will not be. (If it might, stop and use the private report link above.)
+          required: true
+
+  - type: textarea
+    id: version
+    attributes:
+      label: Version
+      description: Output of `irondome version --json`, and how you installed IronDome (pipx, uv tool, pip, from source). If `irondome` does not start, paste the install command and its error instead.
+      placeholder: |
+        {"version": "4.0.0", "python": "3.13.5", "cryptography": "50.0.2", "openssl": "OpenSSL 3.5.1 1 Jul 2025"}
+        installed with: pipx
+      render: text
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: Name, version and CPU architecture.
+      placeholder: macOS 26.1, Apple M3 / Ubuntu 24.04, x86_64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Device backend
+      description: Which device key protects the vault, as `irondome status` shows it.
+      options:
+        - macos-se (Secure Enclave)
+        - linux-tpm2 (TPM 2.0)
+        - software (file key, no security chip)
+        - No vault yet, or I cannot tell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: caller
+    attributes:
+      label: Who ran the command
+      description: IronDome behaves differently for a person at a terminal and for an agent, by design.
+      options:
+        - A person at a terminal
+        - An AI agent or a script (no terminal)
+        - An agent through the MCP server
+        - Not sure
+
+  - type: textarea
+    id: status
+    attributes:
+      label: Output of `irondome status`
+      description: |
+        `status` unlocks nothing and prints no secret, but it does show the vault path (which contains your username), the bunker name and the keyslot descriptions. Replace anything you consider private with `<redacted>`. If `irondome` does not start, write that.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The exact commands, in order. Use a throwaway bunker and made-up values, never a real secret.
+      placeholder: |
+        1. irondome ...
+        2. irondome ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+      description: What happened instead, with the exact message and the exit status (`echo $?`).
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you submit
+      options:
+        - label: I read everything above once more. It contains no token, recovery key, password, TOTP seed or bunker file, and my username and any private labels are replaced with `<redacted>`.
+          required: true
