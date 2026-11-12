@@ -162,7 +162,8 @@ def test_the_release_runs_the_whole_ci_first_then_builds_where_nothing_else_runs
     """supply:2: tests and dev dependencies run in the ci job; the job that writes dist/ only builds and checks."""
     release = jobs(RELEASE)
     assert set(release) == {"ci", "build", "publish"}
-    assert re.search(r"^    uses: \./\.github/workflows/ci\.yml$", release["ci"], re.M)
+    calls_ci = r"^    uses: \./\.github/workflows/ci\.yml(  # zizmor: ignore\[self-repository\])?$"
+    assert re.search(calls_ci, release["ci"], re.M)
     assert re.search(r"^  workflow_call:", text(CI), re.M), "ci.yml must be callable from release.yml"
     build = release["build"]
     assert re.search(r"^    needs: ci$", build, re.M)

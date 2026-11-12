@@ -21,7 +21,9 @@ permissions: {}
 
 jobs:
   ci:
-    uses: ./.github/workflows/ci.yml
+    # A reusable workflow named this way is read from the tagged commit when the run starts, not from the workspace,
+    # so no earlier step can swap it. The `$/` form (GitHub, July 2026) is kept out until it has run here.
+    uses: ./.github/workflows/ci.yml  # zizmor: ignore[self-repository]
     permissions:
       contents: read
 

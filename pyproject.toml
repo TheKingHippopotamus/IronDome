@@ -61,9 +61,12 @@ dev = [
     "hypothesis>=6.100",
     "ruff>=0.14",
     "mypy>=1.14",
-    "build>=1.2",
     "twine>=6.2",
 ]
+
+[dependency-groups]
+# CI tools, hash-locked like everything else: ci.yml and scripts/check.sh run them with `uv run --locked --only-group ci`.
+ci = ["pip-audit>=2.10.1", "zizmor>=1.0"]
 
 [project.scripts]
 # One command. The 3.x names `irondome-cli` and `bunker` are gone.
@@ -101,6 +104,12 @@ irondome = [
 # first uv that no longer trusts the compromised emSign root certificates.
 exclude-newer = "7 days"
 required-version = ">=0.13.4"
+# Version-pins the build backend for the editable builds `uv sync` does (no hash is possible there).
+# Keep it equal to BUILD_CONSTRAINTS in scripts/check.sh.
+build-constraint-dependencies = ["setuptools==84.2.1"]
+
+[tool.uv.dependency-groups]
+ci = { requires-python = ">=3.10" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
