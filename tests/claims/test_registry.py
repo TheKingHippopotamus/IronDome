@@ -5,8 +5,10 @@ file fails the build if a claim has no test, if a listed test does not exist,
 if a claim's own test file has a test the registry does not list, if a
 ``selfcheck`` names a check ``irondome verify`` does not have, if
 ``docs/CLAIMS.md`` is not exactly what ``scripts/claims.py`` renders, if one of
-the 3.x limits L1-L4 is closed by no claim, or if the README or the threat
-model refers to a claim the registry does not have.
+the 3.x limits L1-L4 is closed by no claim, if the README, the threat model,
+the architecture or SECURITY.md refers to a claim the registry does not have,
+if the README's sample session shows a line the program does not print, or if
+the README's exit codes are not exactly the program's.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from typing import Any, Dict, List, Set
 
 import pytest
 
+from conftest import PASSWORD
 from irondome import selftest
 
 REPOSITORY = Path(__file__).resolve().parents[2]
@@ -181,10 +184,95 @@ def referenced_claims(text: str) -> Set[str]:
     return found
 
 
-@pytest.mark.parametrize("document", ["README.md", "docs/THREAT_MODEL.md", "docs/ARCHITECTURE.md"])
+@pytest.mark.parametrize("document", ["README.md", "docs/THREAT_MODEL.md", "docs/ARCHITECTURE.md", "SECURITY.md"])
 def test_the_documents_refer_to_no_claim_that_is_not_in_the_registry(document):
     path = REPOSITORY / document
     assert referenced_claims(path.read_text(encoding="utf-8")) - ids() == set()
+
+
+def test_security_md_refers_to_claims_and_each_one_exists():
+    """SECURITY.md sends reporters to the claims; the claims it names by anchor must be real ones."""
+    named = referenced_claims((REPOSITORY / "SECURITY.md").read_text(encoding="utf-8"))
+    assert named and named <= ids()
+
+
+# -- what the README quotes of the program ---------------------------------------------
+
+
+def _readme_hero() -> List[str]:
+    """The README's first console block, line by line."""
+    text = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+    block = re.search(r"```console\n(.*?)```", text, flags=re.DOTALL)
+    assert block is not None
+    return block.group(1).splitlines()
+
+
+#: What differs from one run to the next in the README's sample output (a shortened token, ids, a time), and
+#: what each stands for in what the program prints.
+_VARIABLE = re.compile(
+    r"(irondome_g_[0-9a-f]{4}…)|((?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f]))|((?<![0-9a-f])[0-9a-f]{12}(?![0-9a-f]))"
+    r"|(\d{4}-\d\d-\d\d \d\d:\d\d)"
+)
+_REAL = (r"irondome_g_[0-9a-f]{32}_[A-Z2-7]{52}", "[0-9a-f]{32}", "[0-9a-f]{12}", r"\d{4}-\d\d-\d\d \d\d:\d\d")
+#: Prompts the program writes on the terminal, where the README's reader types; with --password-stdin it
+#: writes none.
+_PROMPTS = {"Master password:", "Value for github:"}
+
+
+def _pattern(line: str) -> "re.Pattern[str]":
+    """*line* as an expression: its literal text exactly, its variable parts as what they stand for."""
+    parts, last = [], 0
+    for match in _VARIABLE.finditer(line):
+        parts += [re.escape(line[last : match.start()]), _REAL[(match.lastindex or 1) - 1]]
+        last = match.end()
+    return re.compile("".join(parts) + re.escape(line[last:]))
+
+
+def test_the_readme_sample_session_prints_exactly_what_the_program_prints(cli):
+    """Every command of the README's first block runs here, and every line it shows is a line the program printed."""
+    blocks: List[List[str]] = []
+    for line in _readme_hero():
+        if line.startswith("$ "):
+            blocks.append([line])
+        elif line.strip():
+            blocks[-1].append(line)
+    commands = [block[0] for block in blocks]
+    assert commands[0].startswith("$ irondome add github --kind secret --alias GITHUB_TOKEN")
+    assert commands[1].startswith("$ irondome grant create GITHUB_TOKEN --ttl 15m")
+    agent = "irondome run --env GITHUB_TOKEN -- sh -c 'echo \"got $GITHUB_TOKEN\"'"
+    assert [command.split("… ", 1)[-1] for command in commands[2:]] == [agent, agent]
+    init_done = cli("init", "--password-stdin", stdin=PASSWORD + "\n")
+    assert init_done.returncode == 0, init_done.stderr
+    # The same commands with what the reader types at the prompts on stdin instead.
+    added = cli("add", "github", "--kind", "secret", "--alias", "GITHUB_TOKEN", "--password-stdin", "--value-stdin",
+                stdin=f"{PASSWORD}\nghp_{'x' * 36}\n")
+    created = cli("grant", "create", "GITHUB_TOKEN", "--ttl", "15m", "--password-stdin", stdin=PASSWORD + "\n")
+    token = {"IRONDOME_GRANT": created.stdout.strip()}
+    run = ["run", "--env", "GITHUB_TOKEN", "--", "sh", "-c", 'echo "got $GITHUB_TOKEN"']
+    printed = [added, created, cli(*run, env=token), cli(*run, env=token)]
+    assert [done.returncode for done in printed] == [0, 0, 0, 4]
+    for block, done in zip(blocks, printed):
+        real = done.stdout.splitlines() + done.stderr.splitlines()
+        for shown in block[1:]:
+            if shown.strip() in _PROMPTS:
+                continue
+            assert any(_pattern(shown).fullmatch(line) for line in real), (shown, real)
+
+
+def test_the_readme_lists_every_exit_status_the_program_has():
+    """The README's exit codes are errors.py's, run's own and 130, and nothing else."""
+    from irondome import errors
+    from irondome.agent import runner
+
+    text = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+    paragraph = re.search(r"Exit codes: (.*?)\n\n", text, flags=re.DOTALL)
+    assert paragraph is not None
+    listed = {int(number) for number in re.findall(r"(?<![\w-])(\d{1,3})(?![\w-])", paragraph.group(1))}
+    defined = {
+        value.exit_code for module in (errors, runner) for value in vars(module).values()
+        if isinstance(value, type) and issubclass(value, errors.IronDomeError)
+    }
+    assert defined | {errors.EXIT_OK, errors.EXIT_INTERRUPTED} == listed - {128}
 
 
 def test_the_readme_points_at_the_claims_and_at_irondome_verify():

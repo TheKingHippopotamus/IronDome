@@ -101,6 +101,16 @@ behaviour, not vulnerabilities. The main ones:
 * tokens: a grant token is a bearer secret, so whoever holds it and can read
   the grant file has what it grants, and a session token in an agent's
   environment is full access;
+* use counts and the revoking of a single grant, which rest on deleting its
+  file: a copy of the file put back works again until the grant expires (see
+  claim [`grants-are-scoped`](docs/CLAIMS.md#grants-are-scoped); `rekey` and
+  `nuke` end it);
+* the default Argon2id cost of 64 MiB on a machine with less than 3 GiB of
+  RAM, and any cost from 19 MiB up set with `IRONDOME_KDF_MEMORY_MIB` or
+  `--kdf-memory-mib` (claim [`modern-crypto`](docs/CLAIMS.md#modern-crypto));
+* `IRONDOME_DEBUG=1`, which leaves core dumps and, on Linux, debugger access
+  as the system allows them (claim
+  [`process-hardened`](docs/CLAIMS.md#process-hardened));
 * replacing the whole vault file with an older copy (whole-file rollback),
   and deleting the newest lines of the audit log or the whole log;
 * the file-based device key, used where there is no security chip and on

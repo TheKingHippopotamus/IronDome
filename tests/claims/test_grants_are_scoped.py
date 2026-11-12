@@ -149,3 +149,24 @@ def test_boundary_use_counts_are_enforced_by_deleting_the_file_not_by_hardware(c
     fails(run_as_agent(cli, token, "GITHUB_TOKEN"), 4)
     restore_tree(tmp_path / "caps-copy", paths.caps_dir())
     ok(run_as_agent(cli, token, "GITHUB_TOKEN"))
+
+
+def test_boundary_revoking_one_grant_is_enforced_by_deleting_its_file(cli, two_entries, tmp_path):
+    """Whoever copies the grant file before ``grant revoke`` and puts it back has the grant again, until it expires."""
+    created = grant(cli, "GITHUB_TOKEN", args=("--uses", "5"))
+    copy_tree(paths.caps_dir(), tmp_path / "caps-copy")
+    ok(cli("grant", "revoke", created["id"][:12], "--password-stdin", stdin="correct horse battery staple\n"))
+    fails(run_as_agent(cli, created["token"], "GITHUB_TOKEN"), 4)
+    restore_tree(tmp_path / "caps-copy", paths.caps_dir())
+    ran = ok(run_as_agent(cli, created["token"], "GITHUB_TOKEN"))
+    assert "[irondome:VALUE]" in ran.stdout  # the child got the value again; what it printed came back masked
+
+
+def test_boundary_rekey_ends_a_grant_even_when_its_file_is_put_back(cli, two_entries, tmp_path):
+    """rekey destroys the device secret every grant is bound to: a copy of the file put back opens nothing."""
+    created = grant(cli, "GITHUB_TOKEN", args=("--uses", "5"))
+    copy_tree(paths.caps_dir(), tmp_path / "caps-copy")
+    ok(cli("rekey", "--password-stdin", "--yes", stdin="correct horse battery staple\n"))
+    restore_tree(tmp_path / "caps-copy", paths.caps_dir())
+    dead = fails(run_as_agent(cli, created["token"], "GITHUB_TOKEN"), 4)
+    assert "the-github-token-1234" not in dead.stdout + dead.stderr

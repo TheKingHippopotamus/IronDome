@@ -588,7 +588,8 @@ def _slots(cli: Run, env: Dict[str, str]) -> List[Any]:
 
 def test_init_touchid_mode_opens_with_touch_or_the_fallback_password(cli: Run, touch: Touch) -> None:
     created = init(cli, "--mode", "touchid", env=touch.env)
-    assert created["mode"] == "touchid" and created["device"] == {"backend": "fake-touch", "hardware": True}
+    assert created["mode"] == "touchid"
+    assert created["device"] == {"backend": "fake-touch", "hardware": True, "why_no_chip": None}
     assert _slots(cli, touch.env) == [
         ("device", "fake-touch", "biometry"),
         ("password", "fake-touch", "device"),
@@ -653,7 +654,7 @@ def test_auth_touchid_adds_touch_and_agents_get_only_what_entries_allow(cli: Run
     code = ok(cli("--touch", "otp", "github", env=touch.env)).stdout
     assert re.fullmatch(r"\d{6}", code)
     listed = as_json(cli("--json", "--touch", "ls", env=touch.env))
-    assert [row["name"] for row in listed] == ["github"]
+    assert [row["name"] for row in listed["entries"]] == ["github"]
     ok(owner(cli, "edit", "github", "--agent", "reveal", env=touch.env))
     assert ok(cli("--touch", "get", "github", env=touch.env)).stdout == "gh-value-1"
     fails(cli("--touch", "get", "github", env=touch.refusing()), 4, "cancelled")
@@ -746,7 +747,7 @@ def test_add_takes_the_value_from_each_source(cli: Run) -> None:
     fails(owner(cli, "add", "five"), 2, "no terminal", "--value-stdin")
     fails(owner(cli, "add", "five", "--value-stdin"), 2, "expected the value")
     fails(owner(cli, "add", "five", "--value-stdin", "--totp", more=["v"]), 2, "--totp-stdin")
-    assert [row["name"] for row in as_json(owner(cli, "--json", "ls"))] == ["four", "one", "three", "two"]
+    assert [row["name"] for row in as_json(owner(cli, "--json", "ls"))["entries"]] == ["four", "one", "three", "two"]
 
 
 def test_add_reports_json_and_records_everything_given(cli: Run) -> None:
@@ -1149,7 +1150,7 @@ def test_recovery_new_retires_the_old_key(cli: Run, vault: str) -> None:
     unlock.unlock(VaultFile.load(), recovery_key=first).wipe()
     result = owner(cli, "--json", "recovery", "new")
     document = as_json(result)  # stdout is exactly one JSON document; the re-key summary goes to stderr
-    assert "re-keyed its vault" in result.stderr and document["recovery_key"] not in result.stderr
+    assert "Re-keyed: a new vault key" in result.stderr and document["recovery_key"] not in result.stderr
     assert set(document) == {"bunker", "recovery_key", "replaced", "rekey"}
     second = document["recovery_key"]
     assert RECOVERY_KEY.fullmatch(second) and second != first and document["replaced"] == 1
@@ -1270,7 +1271,7 @@ def test_recovery_remove_re_keys_so_the_old_key_opens_nothing_stored_from_now_on
     earlier = paths.vault_file().read_bytes()
     removed = owner(cli, "--json", "recovery", "remove", "--yes")
     document = as_json(removed)  # stdout is exactly one JSON document; the re-key summary goes to stderr
-    assert "re-keyed its vault" in removed.stderr
+    assert "Re-keyed: a new vault key" in removed.stderr
     assert set(document) == {"bunker", "removed", "rekey"} and document["removed"] == 1
     assert [slot["kind"] for slot in document["rekey"]["keyslots"]] == ["password"]
     ok(owner(cli, "add", "after", "--value-stdin", more=["NEW-SECRET-AFTER"]))

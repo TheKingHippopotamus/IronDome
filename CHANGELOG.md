@@ -96,7 +96,11 @@ The new architecture removes all of them:
   (not inside compressed files such as git objects).
 - **One-time passwords:** TOTP (RFC 6238) on any entry, `otpauth://` import.
 - **Verification:** `docs/CLAIMS.md`, generated from the registry the website
-  is also checked against; `irondome verify`; `irondome doctor`.
+  is also checked against; `irondome verify`; `irondome doctor`. Among the
+  claims: core dumps off and, on Linux, no same-user debugger
+  (`process-hardened`); a copied secret taken off the clipboard
+  (`clipboard-cleared`); no secret value as a command-line argument
+  (`no-secrets-in-arguments`).
 - **Bunkers:** several fully separate vaults on one machine
   (`irondome bunker create|ls|use|rm`, `--bunker`, `IRONDOME_BUNKER`), one per
   person or role, each with its own keys, grants and audit log.
@@ -143,8 +147,14 @@ The new architecture removes all of them:
   for, `(bunker NAME)`. `run --touch` shows the whole resolved path of the
   program, looks it up once and starts exactly that path; the program still
   sees the name it was called by as `argv[0]`.
-- `recovery new` and `recovery remove` re-key the vault, so an old recovery key
-  opens nothing stored from then on, even from an older copy of the file.
+- `recovery new` and `recovery remove` re-key the vault, so the old recovery
+  key opens neither the vault as it is now nor anything stored in it later. A
+  copy of the vault file made before then still opens with the old key and
+  shows what it held then.
+- An interrupted keyslot change (`passwd`, `auth`) is finished by the next
+  command that opens the vault. A `rekey` that fails after the new vault key
+  took over still shows the new recovery key, and the next `rekey` finishes
+  destroying what the old key opened.
 - `migrate` reads the 3.x key of a vault without a master password with
   `/usr/bin/security` on macOS and `secret-tool` on Linux; the `keyring`
   package is no longer used. Elsewhere, give the key with `--legacy-key`.
@@ -164,7 +174,10 @@ The new architecture removes all of them:
 
 No independent audit. Decrypted entries are ordinary Python strings while a
 command runs. A recovery key, and a portable backup made with
-`irondome export`, outlive `nuke`. Whole-file rollback is not detected. See `docs/THREAT_MODEL.md`.
+`irondome export`, outlive `nuke`. Whole-file rollback is not detected. A
+grant's use count and a revoke rest on deleting its file, so a copy of the
+file put back works again until the grant expires (`rekey` ends it). See
+`docs/THREAT_MODEL.md`.
 
 ## [3.2.2] — 2026-08-23
 

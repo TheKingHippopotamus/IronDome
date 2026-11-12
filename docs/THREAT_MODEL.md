@@ -66,21 +66,24 @@ two parts.
   prevent that.
 
 **While a command is running:** IronDome keeps the window small. Key material
-is held only in locked memory and wiped when the command finishes; on Linux
-the process is marked non-dumpable so other processes of the same user cannot
-attach to it or read its memory. A process with root or debugger rights can
-still read anything, as with every program.
+is held only in locked memory and wiped when the command finishes. IronDome
+turns off core dumps for itself, and on Linux marks itself non-dumpable so
+other processes of the same user cannot attach to it or read its memory
+(claim [`process-hardened`](CLAIMS.md#process-hardened); `IRONDOME_DEBUG=1`
+switches both off). A process with root or debugger rights can still read
+anything, as with every program.
 
 ### 4. An AI agent you gave access to
 
 The agent is assumed to be capable, well-meaning and **steerable by whatever
 text it reads** (prompt injection). The design goal is that secrets never
 enter its context window unless you chose that, and that anything it does is
-limited, attributable and revocable.
+limited, attributable and revocable, within the limits listed below.
 
 * An agent never has the master password or the vault key. It has either a
-  **grant** (a token for exactly the values you named, for a limited time and
-  number of uses) or the ability to ask you for **Touch ID**.
+  **grant** (a token for exactly the values you named, for a limited time and,
+  unless you say otherwise, a single use) or the ability to ask you for
+  **Touch ID**.
 * A grant is a separate encrypted snapshot. It contains nothing that was not
   named. A grant for a one-time-password field contains only the codes valid
   during its lifetime, never the seed.
@@ -90,9 +93,15 @@ limited, attributable and revocable.
 * Sessions and grants are bound to the machine. The key that seals a session
   or grant needs both its token and a device secret held by the Secure Enclave,
   the TPM or the device file, so a copied token and capability file open
-  nothing on another machine, in another bunker, or after `nuke`. An agent in a
-  container that can read the vault directory but not the device directory
-  cannot use grants at all.
+  nothing on another machine, in another bunker, or after `rekey` or `nuke`. An
+  agent in a container that can read the vault directory but not the device
+  directory cannot use grants at all.
+* Use counts and revoking a single grant are enforced by deleting the grant's
+  file. An agent that can write the bunker's `caps/` directory can copy the
+  file before a use or a revoke and put it back, and the grant works again
+  until it expires; the audit log records each such use. To end a grant
+  against such an agent, run `irondome rekey`, which destroys the device
+  secret every grant is bound to, and rotate the secrets the grant covered.
 
 **An agent in your terminal.** Agent tools often run their commands in your
 own terminal session, so IronDome treats such an agent as you for prompts. It
@@ -111,10 +120,12 @@ sandbox. Give agents narrow, short-lived grants, and rotate what they used.
 
 ### 5. Someone who gets the disk after you ran `irondome nuke`
 
-`nuke` destroys the device secrets first (the vault's and the one its
-sessions and grants are bound to), then overwrites and deletes everything else. Without the device secret, no keyslot that depends on your
-password or fingerprint can ever be opened again, so it no longer matters
-what an SSD's wear-levelling kept of the vault ciphertext.
+`nuke` destroys the device secrets first (the vault's, and every one its
+sessions and grants were bound to), then overwrites and deletes everything
+else. Without the device secret, no keyslot that depends on your password or
+fingerprint can ever be opened again, and no session or grant token opens
+anything, so it no longer matters what an SSD's wear-levelling kept of the
+vault ciphertext.
 
 How final the destruction of the device secret is depends on the backend:
 
@@ -128,6 +139,13 @@ How final the destruction of the device secret is depends on the backend:
 
 A recovery key on paper is not reachable by `nuke`. If a copy of the vault
 file survives somewhere and the recovery key survives too, that copy opens.
+Neither is a portable backup made with `irondome export`: it needs no device
+secret and opens with its own password.
+
+`irondome recovery new` and `irondome recovery remove` re-key the vault, so
+the old recovery key opens neither the vault as it is now nor anything
+stored in it later. A copy of the vault file made before then still opens
+with the old key and shows what it held then.
 
 ## Non-goals and known limits
 
@@ -149,13 +167,26 @@ file survives somewhere and the recovery key survives too, that copy opens.
 * **Touch ID prompts name the helper program**, not the agent that triggered
   them. The reason text is supplied by the caller. Read it. IronDome's own
   prompts end with the bunker they are for ("(bunker NAME)"), and
-  `run --touch` names the whole resolved path of the program it will start;
-  the program is looked up once and started by exactly that path.
+  `run --touch` names the whole resolved path of the program it will start,
+  and refuses a path too long to show in full; the program is looked up once
+  and started by exactly that path.
 * **Sessions and grants die together.** Every device secret a vault's sessions
   and grants were bound to is named in its encrypted index (normally one; when
   one has to be replaced, the old one stays listed); `nuke` and `rekey` destroy
   them all, which ends every one of them. Revoking a single one deletes its
   file and its wrapped snapshot.
+* **Use counts and single revocations are only as final as the deletion of a
+  file.** A copy of a grant's file put back into `caps/` brings back the uses
+  it had and undoes a revoke, until the grant expires. Only `rekey` or `nuke`
+  ends a grant against something that can write that directory.
+* **`config.json` is not authenticated.** Anything that can write the bunker
+  directory can change a setting within its range. The ranges hold no unsafe
+  value: generated passwords of at least 16 characters, passphrases of at
+  least 5 words, a default grant lifetime of at most a day.
+* **The default Argon2id cost is lower on a small machine:** 64 MiB instead of
+  256 MiB where there is less than 3 GiB of RAM, and `IRONDOME_KDF_MEMORY_MIB`
+  or `--kdf-memory-mib` replaces it with any value from 19 MiB to 4 GiB. A
+  keyslot keeps the cost it was made with.
 * **The TPM index that binds sessions and grants has an empty authorisation**
   and is exempt from dictionary-attack lockout, so that a lockout cannot stop
   every grant. Any account allowed to use the TPM can read it; it is useless
@@ -165,7 +196,7 @@ file survives somewhere and the recovery key survives too, that copy opens.
 
 | Purpose | Primitive | Parameters |
 | --- | --- | --- |
-| Password stretching | Argon2id (RFC 9106) | 256 MiB, t=3, p=4 by default; never below the OWASP minimum (19 MiB with t=2, or 46 MiB with t=1); stored per keyslot |
+| Password stretching | Argon2id (RFC 9106) | 256 MiB, t=3, p=4 by default (64 MiB, t=3, p=4 with less than 3 GiB of RAM); never below the OWASP minimum (19 MiB with t=2, or 46 MiB with t=1); stored per keyslot |
 | Key derivation | HKDF-SHA256 (RFC 5869) | one label per purpose; salt binds vault and slot |
 | Encryption | AES-256-GCM | random 96-bit nonce, 128-bit tag, context in associated data |
 | Device binding (macOS) | ECDH on P-256 inside the Secure Enclave | against a random point with no known discrete log |

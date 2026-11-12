@@ -1,10 +1,14 @@
 """Claim ``modern-crypto``: Argon2id and AES-256-GCM, from one audited library.
 
-Statement: master passwords are stretched with Argon2id (256 MiB, 3 passes, 4
-lanes by default; never below the OWASP minimum), keys are derived with
-HKDF-SHA256 and data is encrypted with AES-256-GCM using random 96-bit nonces.
-IronDome implements no primitive itself; all of them come from
+Statement: master passwords are stretched with Argon2id (by default 256 MiB,
+3 passes and 4 lanes, and 64 MiB, RFC 9106's low-memory choice, on a machine
+with less than 3 GiB of RAM; never below the OWASP minimum), keys are derived
+with HKDF-SHA256 and data is encrypted with AES-256-GCM using random 96-bit
+nonces. IronDome implements no primitive itself; all of them come from
 pyca/cryptography and are checked against published test vectors.
+
+The suite sets ``IRONDOME_KDF_MEMORY_MIB=19`` to stay fast; the tests of the
+default take it away first.
 """
 
 from __future__ import annotations
@@ -24,6 +28,8 @@ from support.claimkit import document, init
 
 PACKAGE = Path(irondome.__file__).resolve().parent
 REPOSITORY = Path(__file__).resolve().parents[2]
+MIB = 1024**2
+GIB = 1024**3
 
 # RFC 5869, test case 1.
 HKDF_IKM, HKDF_SALT, HKDF_INFO = "0b" * 22, "000102030405060708090a0b0c", "f0f1f2f3f4f5f6f7f8f9"
@@ -69,15 +75,28 @@ def test_the_argon2id_irondome_uses_is_rfc_9106_argon2id():
         assert bytes(ours.view()) == reference.derive(b"a password")
 
 
-def test_a_new_vault_stores_the_default_cost(cli, monkeypatch):
+@pytest.mark.parametrize(
+    ("ram", "mib"),
+    [(512 * MIB, 64), (2 * GIB, 64), (3 * GIB - 1, 64), (3 * GIB, 256), (16 * GIB, 256), (None, 256)],
+    ids=["512MiB", "2GiB", "just-under-3GiB", "3GiB", "16GiB", "unknown"],
+)
+def test_the_default_is_256_mib_and_64_mib_on_a_machine_with_less_than_3_gib(monkeypatch, ram, mib):
+    """Exactly the two costs the statement names, each on the machines it names (RAM unknown: the full cost)."""
     monkeypatch.delenv("IRONDOME_KDF_MEMORY_MIB")
-    default = crypto.default_argon2()
-    assert (default.iterations, default.lanes) == (3, 4)
-    assert default.memory_kib in (256 * 1024, 64 * 1024)  # 64 MiB only on machines with under 3 GiB of RAM
+    monkeypatch.setattr(crypto, "_physical_memory_bytes", lambda: ram)
+    assert crypto.default_argon2() == crypto.Argon2Params(memory_kib=mib * 1024, iterations=3, lanes=4)
+
+
+def test_a_new_vault_stores_the_default_cost(cli, monkeypatch):
+    """A real ``init`` on this machine stores the default for this machine's RAM, and nothing else."""
+    monkeypatch.delenv("IRONDOME_KDF_MEMORY_MIB")
+    ram = crypto._physical_memory_bytes()
+    expected = 64 * 1024 if ram is not None and ram < 3 * GIB else 256 * 1024
+    assert crypto.default_argon2().memory_kib == expected
     init(cli)
     slot = [slot for slot in VaultFile.load().slots if slot.kind == "password"][0]
     assert slot.kdf is not None and slot.kdf["alg"] == "argon2id"
-    assert (slot.kdf["m"], slot.kdf["t"], slot.kdf["p"]) == (default.memory_kib, 3, 4)
+    assert (slot.kdf["m"], slot.kdf["t"], slot.kdf["p"]) == (expected, 3, 4)
 
 
 @pytest.mark.parametrize("memory_kib", [19 * 1024 - 1, 1024, 8])
@@ -133,3 +152,22 @@ def test_irondome_verify_runs_the_same_checks_on_this_machine(cli):
 def test_boundary_the_threat_model_says_that_nobody_has_audited_irondome():
     threat_model = (REPOSITORY / "docs" / "THREAT_MODEL.md").read_text(encoding="utf-8")
     assert "No independent audit" in threat_model
+
+
+def test_boundary_the_environment_or_the_option_replaces_the_default_cost(cli, monkeypatch):
+    """IRONDOME_KDF_MEMORY_MIB, or --kdf-memory-mib when a vault is made, sets any cost from 19 MiB to 4 GiB."""
+    init(cli)  # the suite's IRONDOME_KDF_MEMORY_MIB=19
+    slot = [slot for slot in VaultFile.load().slots if slot.kind == "password"][0]
+    assert (slot.kdf["m"], slot.kdf["t"], slot.kdf["p"]) == (19 * 1024, 3, 4)
+    made = cli("bunker", "create", "bravo", "--password-stdin", "--kdf-memory-mib", "20",
+               stdin=f"{PASSWORD}\nbravo's own master password\n")  # the owner's password, then the new one
+    assert made.returncode == 0, made.stderr
+    raw = json.loads((paths.root() / "bunkers" / "bravo" / "vault.irondome").read_text())
+    assert [slot["kdf"]["m"] for slot in raw["keyslots"] if slot["kind"] == "password"] == [20 * 1024]
+    for mib, accepted in (("19", True), ("4096", True), ("18", False), ("4097", False)):
+        monkeypatch.setenv("IRONDOME_KDF_MEMORY_MIB", mib)
+        if accepted:
+            assert crypto.default_argon2().memory_kib == int(mib) * 1024
+        else:
+            with pytest.raises(VaultError):
+                crypto.default_argon2()

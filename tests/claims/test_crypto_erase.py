@@ -1,9 +1,11 @@
 """Claim ``crypto-erase``: nuke makes every copy of the vault unreadable.
 
-Statement: nuke destroys the device secret before it deletes anything else.
-Afterwards, restoring a complete, bit-perfect copy of the vault directory and
-supplying the correct master password does not open the vault: what an SSD
-kept of the old blocks no longer matters.
+Statement: nuke destroys the device secrets before it deletes anything else:
+the one every keyslot opened by a password or a fingerprint needs, and the one
+every session and grant is bound to. Afterwards, restoring a complete,
+bit-perfect copy of the vault directory and supplying the correct master
+password, a session token or a grant token opens nothing: what an SSD kept of
+the old blocks no longer matters.
 
 The SSD is modelled by copying the whole vault directory (live file,
 snapshots, audit log, sessions and grants) before ``nuke`` and putting it back
@@ -152,6 +154,21 @@ def test_boundary_without_a_recovery_key_nothing_opens_a_surviving_copy(cli, tmp
         open_with_password(paths.vault_file())
     with pytest.raises(AuthError, match="no recovery key"):
         unlock.unlock(VaultFile.load(), recovery_key="AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA-AAAA")
+
+
+def test_boundary_a_portable_backup_needs_no_device_secret_and_outlives_nuke(cli, tmp_path):
+    """``irondome export`` writes a copy that opens with its own password on any machine, so nuke cannot end it."""
+    init(cli)
+    add(cli, "bank", "the-real-secret-value")
+    backup = tmp_path / "elsewhere" / "alpha.irondome"
+    ok(cli("export", str(backup), "--password-stdin", stdin=f"{PASSWORD}\nthe backup's own password\n"))
+    nuke_everything(cli)
+    file = VaultFile.load(backup)
+    assert all(slot.device is None for slot in file.slots)
+    with secret("the backup's own password") as password:
+        key = unlock.unlock(file, password=password, interactive=False, allow_touch=False)
+    with Vault(file, key, backup) as portable:
+        assert portable.value(portable.find("bank")) == "the-real-secret-value"
 
 
 def test_boundary_with_the_file_based_backend_a_device_file_an_ssd_kept_would_open_the_copy(make_vault, tmp_path):

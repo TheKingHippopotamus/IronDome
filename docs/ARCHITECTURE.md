@@ -15,8 +15,8 @@ How IronDome 4 is put together. For what it defends against, read
    deliberate exceptions are portable: the recovery slot, and the one password
    slot of a file written by `irondome backup`.
 4. An AI agent never gets the vault key or your password. It gets a **grant**:
-   a separate, expiring snapshot of exactly the values you named, which can
-   also be limited to a number of uses.
+   a separate, expiring snapshot of exactly the values you named, good for
+   one use unless you allow more.
 
 ## Key hierarchy
 
@@ -62,9 +62,15 @@ The recovery slot is made unless `--no-recovery` is given. `--mode touchid
 fallback; that combination refuses `--no-recovery`, because a Touch ID key is
 invalidated for good when the enrolled fingers change.
 
-Changing the password, enrolling a finger or rotating the recovery key
-rewrites one slot. Records are untouched. `irondome rekey` replaces the vault
-key itself.
+Changing the password or enrolling a finger replaces keyslots and leaves the
+records untouched: the vault is written with no snapshot of its old keyslots,
+and the device secrets of the slots that went are destroyed (`passwd` also
+deletes the snapshots and ends the sessions). Replacing or removing the
+recovery key cannot work that way, because a copy of the old recovery slot
+would go on giving the vault key to whoever kept one: `irondome recovery new`
+and `irondome recovery remove` re-key the vault as `irondome rekey` does,
+with a new vault key and vault id, every entry re-encrypted, every session
+and grant ended and the snapshots deleted.
 
 ## Device backends
 
@@ -145,7 +151,8 @@ anonymous pages outside the Python heap, locked into RAM, filled in place
 Enclave helper's pipe is read *into* them) and overwritten with zeros as soon
 as they are done with. On Linux those pages are also left out of core dumps
 and read as zeros in a forked child. The process disables core dumps
-(`RLIMIT_CORE = 0`) and, on Linux, marks itself non-dumpable.
+(`RLIMIT_CORE = 0`) and, on Linux, marks itself non-dumpable, unless
+`IRONDOME_DEBUG=1` is set.
 
 Two things are not held that way. The recovery key exists as text, to be
 shown once or typed; its decoded bytes are held in locked memory and zeroed
@@ -174,8 +181,9 @@ entries are ordinary Python strings for as long as a command runs (see
   holding a snapshot of the named values, sealed under a key that needs both
   the token and the bunker's capability device secret (kept under the device
   policy, so this machine releases it without a prompt). Scoped, expiring,
-  optionally limited to a number of uses, mode `use` (inject only) or
-  `reveal`. A grant for a `totp` field holds only the codes for its lifetime,
+  limited to one use unless it is given more (or `--unlimited`), mode `use`
+  (inject only) or `reveal`. Its use count and a revoke are enforced by
+  rewriting or deleting that file. A grant for a `totp` field holds only the codes for its lifetime,
   never the seed. A grant also carries its own audit key, so it can record its
   own uses but cannot write a line that passes as the owner's. Sessions
   (`irondome unlock`) are sealed the same way; a session's payload is the

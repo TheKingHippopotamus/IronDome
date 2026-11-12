@@ -16,7 +16,7 @@ import pytest
 
 from conftest import PASSWORD, secret
 from irondome import keys, unlock
-from irondome.errors import AuthError, HardwareError
+from irondome.errors import AuthError, HardwareError, NotFoundError
 from irondome.vault import Vault, VaultFile
 from support.claimkit import add, contents, copy_tree, document, fails, init, irondome_dirs, ok
 
@@ -114,3 +114,25 @@ def test_boundary_a_vault_made_with_no_recovery_has_no_way_in_without_this_machi
         unlock.unlock(VaultFile.load(path), recovery_key=keys.format_recovery_key(bytes(20)))
     refused = fails(cli("recovery", "remove", "--yes", "--password-stdin", stdin=PASSWORD + "\n"), 3)
     assert "no recovery key" in refused.stderr
+
+
+@pytest.mark.parametrize("action", ["new", "remove"])
+def test_boundary_a_new_or_removed_recovery_key_re_keys_and_only_older_copies_open_with_the_old_one(
+    cli, tmp_path, action
+):
+    """The vault is re-keyed, so the old key opens nothing from then on; a copy made before still opens with it."""
+    first = init(cli)["recovery_key"]
+    add(cli, "bank", "stored-before-the-change")
+    older = copy_elsewhere(tmp_path)
+    before = VaultFile.load().vault_id
+    ok(cli("recovery", action, *(("--yes",) if action == "remove" else ()), "--password-stdin", "--json",
+           stdin=PASSWORD + "\n"))
+    assert VaultFile.load().vault_id != before  # a new vault key and vault id
+    add(cli, "mail", "stored-after-the-change")
+    with pytest.raises(AuthError):
+        unlock.unlock(VaultFile.load(), recovery_key=first)
+    old = VaultFile.load(older)
+    with Vault(old, unlock.unlock(old, recovery_key=first), older) as copy:
+        assert copy.value(copy.find("bank")) == "stored-before-the-change"
+        with pytest.raises(NotFoundError):
+            copy.find("mail")
