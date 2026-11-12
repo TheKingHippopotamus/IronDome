@@ -68,19 +68,27 @@ def checkout(tmp_path: Path) -> Path:
     engine.parent.mkdir()
     engine.write_text(ENGINE)
     engine.chmod(0o755)
+    uv = engine.parent / "uv"  # the stand-in uv: records its arguments, exits with FAKE_UV_EXIT
+    uv.write_text('#!/usr/bin/env bash\nprintf \'%s\\0\' "$@" >"$(dirname "$0")/call-uv"\nexit "${FAKE_UV_EXIT:-0}"\n')
+    uv.chmod(0o755)
     return root
 
 
-def harness(checkout: Path, *args: str, **env: str) -> Path:
-    """Run the harness's host half with the stand-in engine; returns the folder of its records."""
+def run_harness(checkout: Path, *args: str, **env: str) -> "subprocess.CompletedProcess[str]":
+    """Run the harness's host half with the stand-in engine and the stand-in uv."""
     records = checkout.parent / "engine"
     variables = {key: value for key, value in os.environ.items() if not key.startswith("IRONDOME_TEST_")}
     variables.update(IRONDOME_CONTAINER_ENGINE=str(records / "fake-engine"), GIT_CONFIG_NOSYSTEM="1",
-                     GIT_CONFIG_GLOBAL=os.devnull, **env)
-    result = subprocess.run(["bash", str(checkout / "scripts" / "test-linux.sh"), *args], cwd=checkout,
-                            env=variables, capture_output=True, text=True, timeout=120)
+                     GIT_CONFIG_GLOBAL=os.devnull, PATH=f"{records}{os.pathsep}{os.environ.get('PATH', '')}", **env)
+    return subprocess.run(["bash", str(checkout / "scripts" / "test-linux.sh"), *args], cwd=checkout,
+                          env=variables, capture_output=True, text=True, timeout=120)
+
+
+def harness(checkout: Path, *args: str, **env: str) -> Path:
+    """Run the harness's host half; it must succeed. Returns the folder of its records."""
+    result = run_harness(checkout, *args, **env)
     assert result.returncode == 0, f"exit {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
-    return records
+    return checkout.parent / "engine"
 
 
 def arguments(records: Path, verb: str) -> List[str]:
@@ -135,8 +143,19 @@ def test_the_image_installs_exactly_what_uv_lock_pins_hash_checked_and_builds_no
     assert len(installs) == 1, installs
     for flag in ("--require-hashes", "--no-build", "-r requirements.txt"):
         assert flag in installs[0], installs
-    assert "uv export --quiet --locked --all-extras --no-emit-project --format requirements-txt" in image
+    assert "uv export --quiet --frozen --all-extras --no-emit-project --format requirements-txt" in image
     assert "COPY --chown=tester:tester uv.lock pyproject.toml /home/tester/lock/" in image
+
+
+def test_the_lock_is_checked_against_pyproject_before_the_image_is_built(checkout):
+    """The image exports uv.lock with --frozen, so the freshness check is made on the checkout, first."""
+    records = harness(checkout)
+    assert arguments(records, "uv")[:2] == ["lock", "--check"]
+    (records / "call-build").unlink()
+    stale = run_harness(checkout, FAKE_UV_EXIT="1")
+    assert stale.returncode != 0
+    assert "uv.lock does not match pyproject.toml" in stale.stderr
+    assert not (records / "call-build").exists(), "nothing is built from a stale lock"
 
 
 def test_the_harness_installs_nothing_and_fetches_nothing_at_run_time():

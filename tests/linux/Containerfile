@@ -56,13 +56,16 @@ ARG PYTHONS="3.9 3.13"
 RUN uv python install $PYTHONS
 
 # What uv.lock pins for the tests (the runtime dependency and the dev extra).
-# --locked refuses a uv.lock that no longer matches pyproject.toml,
+# --frozen exports uv.lock exactly as it is. --locked would also check it against
+# pyproject.toml, which means building the project to read its version, and the
+# source is not in this context. scripts/test-linux.sh runs `uv lock --check` on
+# the checkout before it builds, so a stale lock never gets this far.
 # --require-hashes refuses any file whose hash the lock does not list, and
 # --no-build refuses to build anything from source: uv.lock has a wheel for
 # every one of them, on both architectures and every supported Python.
 COPY --chown=tester:tester uv.lock pyproject.toml /home/tester/lock/
 RUN cd /home/tester/lock \
-    && uv export --quiet --locked --all-extras --no-emit-project --format requirements-txt -o requirements.txt \
+    && uv export --quiet --frozen --all-extras --no-emit-project --format requirements-txt -o requirements.txt \
     && for version in $PYTHONS; do \
         uv venv --quiet --python "$version" "/home/tester/venv-$version" \
         && uv pip install --quiet --no-cache --no-build --require-hashes \

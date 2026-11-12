@@ -202,6 +202,10 @@ done
 # file of the checkout other than these three is ever sent to the engine.
 image="${IRONDOME_TEST_IMAGE:-}"
 if [ -z "$image" ]; then
+    # The image exports uv.lock as it is (--frozen), so the lock is checked
+    # against pyproject.toml here, where the source is.
+    command -v uv >/dev/null 2>&1 || die "uv is needed to check uv.lock before the image is built"
+    (cd "$repo" && uv lock --check --quiet) || die "uv.lock does not match pyproject.toml; run uv lock"
     image="$IMAGE_TAG:py$(printf '%s' "$pythons" | tr ' ' '-')"
     context="$(mktemp -d "${TMPDIR:-/tmp}/irondome-image.XXXXXX")"
     trap 'rm -rf "$context"' EXIT

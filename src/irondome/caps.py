@@ -45,8 +45,8 @@ Binding to the machine
 Every vault has one *capability device secret*, held by a device backend
 (:mod:`irondome.device`) under the ``device`` policy: this machine releases it
 to a program of the logged-in user with no password and no touch. With the
-Secure Enclave it is a key that any process of the owner can use while the Mac
-is unlocked; with a TPM it is an NV index whose authorisation value is empty,
+Secure Enclave it is a key that any process of the owner can use once the Mac
+has been unlocked after it started; with a TPM it is an NV index whose authorisation value is empty,
 which any process of any account allowed to use the TPM can read; with the
 file-based backend it is a file in the device directory only the owner can
 read. Its descriptor lives in the vault's encrypted index
@@ -95,9 +95,11 @@ What this module cannot do
   SSD the old blocks can survive an overwrite. Either way what is left stays
   unreadable without the token, and without the device secret once that is
   destroyed.
-* The Secure Enclave uses its keys only while the Mac's screen is unlocked,
-  so on a Mac that uses it a session or grant does not open while the Mac is
-  locked.
+* The Secure Enclave key behind sessions and grants is usable once the Mac
+  has been unlocked after it started, and stays usable while the screen is
+  locked (``AfterFirstUnlockThisDeviceOnly``). Until that first unlock, a
+  session or grant does not open. Keys that need Touch ID or a password are
+  usable only while the screen is unlocked.
 * The first session or grant of a vault on a machine records the device
   secret by committing the vault, so whatever else is pending in the
   :class:`~irondome.vault.Vault` passed in is written with it. The audit log
