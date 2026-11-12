@@ -162,6 +162,7 @@ class Context:
         #: How the vault was opened by the last open_vault(): session, touch or password.
         self.unlocked_by: Optional[str] = None
         self._asked_password = False
+        self._rekey_noted = False
 
     # -- who is asking --------------------------------------------------------
 
@@ -220,6 +221,8 @@ class Context:
             password.wipe()
         if not keep_open:
             key.wipe()
+            if name == paths.bunker_name():
+                self.note_unfinished_rekey()  # an owner command that unlocked; the index is not read here
             return None
         self.unlocked_by = "password"
         return self._opened(Vault(file, key))
@@ -397,12 +400,48 @@ class Context:
         return self._opened(Vault(file, vault_key))
 
     def _opened(self, vault: Vault) -> Vault:
-        """Housekeeping on every unlock: expired sessions and grants are destroyed and recorded."""
+        """Housekeeping on every unlock: expired sessions and grants are destroyed and recorded.
+
+        It also says, on every unlock, that a re-key has not finished (:meth:`note_unfinished_rekey`).
+        """
+        self.note_unfinished_rekey(vault)
         try:
             caps.sweep(vault=vault)
         except IronDomeError as exc:
             self.out.warn(f"could not clear expired sessions and grants: {exc}")
         return vault
+
+    def note_unfinished_rekey(self, vault: Optional[Vault] = None) -> None:
+        """Warn, once per command, while a re-key of the current bunker has not finished, and say how to finish.
+
+        Two marks, either of which ``irondome rekey`` clears:
+
+        * a staging file holding the live vault's id (:func:`caps.unfinished_rekey`): the re-key stopped after
+          its switch (SIGKILL, a crash, a power cut), so the old sessions, grants, snapshots and device keys may
+          all still be there, and the new recovery key may never have been shown. Seen without a key, so
+          ``status`` and ``doctor`` report it too; meanwhile every session and grant is refused.
+        * the re-key plan still in the unlocked *vault*'s index (``caps.REKEY_PLAN``), with no such staging file:
+          a re-key finished except for old device keys it could not destroy. Those keys could still open copies
+          of the old vault's sessions and grants on this machine; the next re-key tries them again.
+        """
+        if self._rekey_noted:
+            return
+        staged = caps.unfinished_rekey()
+        if staged is not None:
+            self._rekey_noted = True
+            self.out.warn(caps.unfinished_rekey_warning(staged))
+            return
+        plan = vault.meta.get(caps.REKEY_PLAN) if vault is not None else None
+        if isinstance(plan, dict):
+            held = plan.get("devices")
+            count = len(held) if isinstance(held, list) else 0
+            self._rekey_noted = True
+            self.out.warn(
+                f"the last re-key of bunker {paths.bunker_name()} did not finish: "
+                + (f"{count} old device key{'' if count == 1 else 's'} of the vault it replaced could not be "
+                   "destroyed. " if count else "")
+                + "Finish it with: irondome rekey"
+            )
 
     def open_vault_by_touch(self, *, reason: str) -> Vault:
         """Unlock through a Touch ID keyslot and nothing else. The caller must close it.

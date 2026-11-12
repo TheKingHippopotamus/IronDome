@@ -1247,7 +1247,8 @@ class Tpm2Backend(DeviceBackend):
                 destroyed += int(present)
         if survivors:
             shown = "; ".join(survivors[:3]) + (f"; and {len(survivors) - 3} more" if len(survivors) > 3 else "")
-            raise HardwareError(f"{len(survivors)} TPM device key(s) could not be erased ({shown})")
+            counted = "1 TPM device key" if len(survivors) == 1 else f"{len(survivors)} TPM device keys"
+            raise HardwareError(f"{counted} could not be erased ({shown})")
         return destroyed
 
 

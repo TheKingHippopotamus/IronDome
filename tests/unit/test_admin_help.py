@@ -16,7 +16,8 @@ import pytest
 from irondome.cli.main import build_parser
 
 ADMIN_PAGES = ["backup", "backup ls", "backup restore", "export", "import", "migrate", "rekey", "nuke", "doctor",
-               "completion", "version"]
+               "completion", "version",
+               "verify"]  # cli/cmd_verify.py: the one page re-verification of dx:4 still found without an example
 #: ``irondome`` and the words after it, up to a shell character or the two spaces before an explanation.
 _COMMAND = re.compile(r"\birondome((?: [^ ()<>|]+)+)")
 

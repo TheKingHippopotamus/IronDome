@@ -652,6 +652,7 @@ def _bound_device(vault: "Vault") -> Tuple[_Descriptor, SecureBuffer]:
     :class:`HardwareError`, and nothing made, when the backend cannot tell
     whether the recorded secret is here (see :func:`_usable_here`).
     """
+    _refuse_while_rekeying()  # every session and grant that is made comes through here
     vault_id = vault.vault_id
     recorded = _recorded(vault)
     if recorded is not None:
@@ -702,15 +703,97 @@ def _present(backend: DeviceBackend, descriptor: Dict[str, Any]) -> bool:
         return _works_here(backend)
 
 
+def _plural(count: int, one: str, many: str) -> str:
+    return f"{count} {one if count == 1 else many}"
+
+
+# ---------------------------------------------------------------------------
+# A re-key that stopped after its switch
+# ---------------------------------------------------------------------------
+
+#: The re-keyed vault that ``irondome rekey`` (and ``recovery new`` / ``recovery remove``) builds beside the live
+#: one, ``.tmp-rekey-<hex>.irondome`` in the bunker's directory. It is deleted once the re-key has finished.
+REKEY_STAGING_PREFIX = ".tmp-rekey-"
+REKEY_STAGING_SUFFIX = ".irondome"
+#: In a re-keyed vault's encrypted index: what the vault it replaced leaves to destroy, until that is destroyed.
+REKEY_PLAN = "rekey"
+
+
+def rekey_staging_files() -> List[Path]:
+    """The staging files of re-keys in the bunker's directory: one running now, or ones that did not finish."""
+    try:
+        found = list(paths.home().glob(f"{REKEY_STAGING_PREFIX}*{REKEY_STAGING_SUFFIX}"))
+    except OSError:
+        return []
+    return sorted(path for path in found if path.is_file() and not path.is_symlink())
+
+
+def unfinished_rekey() -> Optional[Path]:
+    """The staging file of a re-key that switched to its new vault and has not finished, or ``None``. Needs no key.
+
+    That staging file holds the live vault's own id: the new vault key took over, but what the old one opens
+    (its device keys, snapshots, sessions and grants) may not all be destroyed yet. A re-key deletes the file
+    last of all, so while it is there the re-key is either running now or stopped (SIGKILL, a crash, a power
+    cut). A staging file with another id is from a re-key that stopped before its switch, which changed nothing
+    that opens the vault; the next ``rekey`` deletes it.
+    """
+    staged = rekey_staging_files()
+    if not staged:
+        return None
+    from irondome.vault import VaultFile  # only a type at the top of this module
+
+    try:
+        live = VaultFile.load().vault_id
+    except (IronDomeError, OSError):
+        return None
+    for path in staged:
+        try:
+            if VaultFile.load(path).vault_id == live:
+                return path
+        except (IronDomeError, OSError):
+            continue  # torn or unreadable: written by a re-key that stopped before its switch
+    return None
+
+
+def unfinished_rekey_warning(path: Path) -> str:
+    """What a command that finds :func:`unfinished_rekey` tells the owner: the cause, and how to finish."""
+    return (
+        f"a re-key of bunker {paths.bunker_name()} stopped after the new vault key took over (its staging file "
+        f"{path.name} is still there), before everything the old vault key opens was destroyed. Until it "
+        "finishes, no session or grant can be used or made, and the new recovery key it made may never have "
+        "been shown. Finish it with: irondome rekey (it shows a new recovery key)"
+    )
+
+
+def _refuse_while_rekeying() -> None:
+    """Fail closed: refuse every session and grant while a re-key that switched has not finished.
+
+    Ending the sessions and grants made before a re-key is part of what it does after its switch. Were they
+    honoured meanwhile, one that stopped there would leave them working until the owner happened to re-key again.
+    """
+    path = unfinished_rekey()
+    if path is not None:
+        raise AuthError(
+            f"sessions and grants of bunker {paths.bunker_name()} cannot be used now: a re-key of its vault has "
+            f"not finished (its staging file {path.name} is still there). If none is running, it stopped after "
+            "the new vault key took over, and the owner finishes it with: irondome rekey"
+        )
+
+
 def _opening_key(header: "_Header", path: Path, dead: str) -> SecureBuffer:
     """The device key the capability in *header* was sealed under. The caller wipes it.
 
+    Every session and grant that is opened comes through here, so this is where an unfinished re-key
+    refuses them all (:func:`_refuse_while_rekeying`), before anything is unsealed.
+
     Raises :class:`AuthError`: with *dead* when its device secret is not on
     this machine (made on another one, or destroyed since), and saying the
-    file was altered when the backend refuses the descriptor itself.
+    file was altered when the backend refuses the descriptor itself; and
+    while a re-key that switched has not finished.
     :class:`HardwareError` when the secret is here but cannot be used now,
     for instance on a locked Mac.
     """
+    _refuse_while_rekeying()
     descriptor = dict(header.device)
     try:
         backend = devices.get_backend(descriptor["backend"])
@@ -1638,7 +1721,9 @@ def end_sessions(token: Optional[str] = None, *, vault: Optional["Vault"] = None
             if os.path.lexists(str(path)) and (header is None or header.kind == KIND_SESSION):
                 _destroy(path)
                 ended.append(cap_id)
-    _note_removed(vault, [("session.end", ended_id) for ended_id in ended], f"{len(ended)} session(s) ended")
+    _note_removed(
+        vault, [("session.end", ended_id) for ended_id in ended], _plural(len(ended), "session ended", "sessions ended")
+    )
     return len(ended)
 
 
@@ -1687,7 +1772,10 @@ def sweep(*, vault: Optional["Vault"] = None) -> int:
             if header is not None and header.expires <= now and _destroy_quietly(path):
                 removed.append((f"{header.kind}.expire", cap_id))
         _remove_temporaries()
-    _note_removed(vault, removed, f"{len(removed)} expired grant(s) or session(s) were removed")
+    _note_removed(
+        vault, removed,
+        _plural(len(removed), "expired grant or session was removed", "expired grants and sessions were removed"),
+    )
     return len(removed)
 
 
@@ -1727,7 +1815,7 @@ def destroy_all() -> int:
         pass  # something that is not IronDome's is still in it
     if survivors:
         raise VaultError(
-            f"{len(survivors)} capability file(s) in {directory} could not be deleted: "
+            f"{_plural(len(survivors), 'capability file', 'capability files')} in {directory} could not be deleted: "
             f"{', '.join(sorted(survivors)[:5])}"
         )
     return destroyed

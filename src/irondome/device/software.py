@@ -143,5 +143,6 @@ class SoftwareBackend(DeviceBackend):
             else:
                 destroyed += 1
         if survivors:
-            raise HardwareError(f"could not destroy the device key(s): {', '.join(survivors)}")
+            what = "the device key" if len(survivors) == 1 else "the device keys"
+            raise HardwareError(f"could not destroy {what}: {', '.join(survivors)}")
         return destroyed

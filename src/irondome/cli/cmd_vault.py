@@ -38,6 +38,7 @@ import re
 import signal
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from irondome import caps, clipboard, config, generator, keys, otp, paths
@@ -614,7 +615,8 @@ def _show_recovery_key(ctx: Context, key: str, bunker: str) -> None:
 
 
 def _rekey_vault(
-    ctx: Context, vault: Vault, password: Optional[SecureBuffer], *, action: str, detail: str
+    ctx: Context, vault: Vault, password: Optional[SecureBuffer], *, action: str, detail: str,
+    on_switch: Optional[Callable[[List[str]], None]] = None,
 ) -> Tuple[Dict[str, Any], List[str]]:
     """Re-key *vault*, with the keyslots it holds now, as ``irondome rekey`` does. Returns (report, recovery keys).
 
@@ -624,6 +626,8 @@ def _rekey_vault(
     snapshots deleted, every session and grant ended and the audit log archived. *action* and
     *detail* are recorded in the new vault's audit log afterwards. The report holds what
     ``irondome rekey --json`` reports, under the same names. *password* stays the caller's.
+    *on_switch* is called with the new recovery keys as soon as the new vault is live, before
+    anything that a crash could stop: from then on they are the only ones that open it.
     """
     from irondome.cli import cmd_admin  # the re-key lives there; nothing else here needs that module
 
@@ -634,6 +638,8 @@ def _rekey_vault(
         if used is not None and used is not password:
             used.wipe()
     try:
+        if on_switch is not None:
+            on_switch(recovery)
         outcome = cmd_admin._retire(ctx, vault, fresh, staging)
         ctx.audit(fresh, action, detail=detail)
         report: Dict[str, Any] = {
@@ -840,6 +846,7 @@ def _status_document() -> Tuple[Dict[str, Any], int]:
         "grants": grants,
         "snapshots": _snapshot_count(),
         "legacy_v3": _legacy_info(),
+        "unfinished_rekey": None,
     }
     if not document["exists"]:
         return document, 0
@@ -849,7 +856,9 @@ def _status_document() -> Tuple[Dict[str, Any], int]:
         document["error"] = str(exc)
         return document, VaultError.exit_code
     used = _devices_of(file.slots)
+    staged = caps.unfinished_rekey()
     document.update(
+        unfinished_rekey=str(staged) if staged is not None else None,
         format=FORMAT,
         version=VERSION,
         generation=file.generation,
@@ -889,6 +898,8 @@ def _print_status(ctx: Context, document: Dict[str, Any]) -> None:
         if chip is not None:
             pairs.extend((label, chip[key]) for label, key in (("no chip", "why"), ("fix", "fix")) if chip[key])
         pairs.extend(("keyslot", _slot_line(info)) for info in document["keyslots"])
+        if document.get("unfinished_rekey"):
+            pairs.append(("re-key", "UNFINISHED: sessions and grants are refused until it is. Run: irondome rekey"))
     for label in ("sessions", "grants"):
         count = document[label]
         shown = "unknown (the capability directory cannot be read)" if count is None else f"{count} active"
@@ -907,6 +918,8 @@ def _status(ctx: Context, args: argparse.Namespace) -> int:
         ctx.out.json(document)
     else:
         _print_status(ctx, document)
+    if document["unfinished_rekey"]:
+        ctx.out.warn(caps.unfinished_rekey_warning(Path(document["unfinished_rekey"])))  # stderr, with --json too
     return status
 
 
@@ -1771,6 +1784,16 @@ def _recovery_new(ctx: Context, args: argparse.Namespace) -> int:
     _require_vault()
     bunker = _bunker()
     report: Optional[Dict[str, Any]] = None
+    printed: List[str] = []
+
+    def show_at_switch(recovery: List[str]) -> None:
+        # The re-key's new recovery key is the only one that opens the vault from its switch on: printed then,
+        # before what a crash could stop. With --json it is in the one document below (see cmd_admin.cmd_rekey).
+        if not ctx.out.json_mode:
+            for each in recovery:
+                _print_recovery_key(ctx, each, bunker)
+                printed.append(each)
+
     with _open_with_password(ctx, f"make a new recovery key for bunker {bunker}") as (vault, password):
         old = vault.slots(KIND_RECOVERY)
         if old and ctx.has_terminal and not ctx.confirm(f"Make a new recovery key? {_rekey_question(bunker)}"):
@@ -1785,6 +1808,7 @@ def _recovery_new(ctx: Context, args: argparse.Namespace) -> int:
                 report, shown = _rekey_vault(
                     ctx, vault, password, action="keyslot.recovery-new",
                     detail=f"re-keyed to replace {_count(len(old), 'recovery key')}",
+                    on_switch=show_at_switch,
                 )
                 key = shown[0]
             else:
@@ -1802,7 +1826,7 @@ def _recovery_new(ctx: Context, args: argparse.Namespace) -> int:
                 )
             if report is not None:
                 _say_rekeyed(ctx, report)  # on stderr, with --json as well
-            if not ctx.out.json_mode:
+            if not ctx.out.json_mode and key not in printed:
                 _print_recovery_key(ctx, key, bunker)
     if not ctx.out.json_mode:
         _wait_until_kept(ctx)

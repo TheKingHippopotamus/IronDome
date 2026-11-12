@@ -34,6 +34,10 @@ results: pass (shown here), FAIL (does not hold here: exit status 1), skipped
 that a Touch ID key works after a touch (the automated check proves that it
 refuses without one). The memory check searches this process's whole address
 space and takes about a minute on a Mac.
+
+examples:
+  irondome verify                           every claim, here
+  irondome verify --claim tamper-evident    one claim, by the id the results show
 """
 
 

@@ -60,10 +60,11 @@ _SHELLS = ("bash", "zsh", "fish")
 _UNPARSED_TOTP_FIELD = "totp_unparsed"
 _WEAK = ("very weak", "weak", "fair")
 #: The re-keyed vault, built beside the live one: ``.tmp-rekey-<hex>.irondome`` in the bunker's directory.
-_STAGING_PREFIX = ".tmp-rekey-"
-_STAGING_SUFFIX = ".irondome"
+#: Defined in caps, which refuses every session and grant while one of the live vault is there.
+_STAGING_PREFIX = caps.REKEY_STAGING_PREFIX
+_STAGING_SUFFIX = caps.REKEY_STAGING_SUFFIX
 #: In a re-keyed vault's encrypted index: the device secrets of the vault it replaced, until they are destroyed.
-_REKEY_PLAN = "rekey"
+_REKEY_PLAN = caps.REKEY_PLAN
 
 _Handler = Callable[[Context, argparse.Namespace], int]
 
@@ -575,6 +576,7 @@ def cmd_backup_restore(ctx: Context, args: argparse.Namespace) -> int:
         raise VaultError(f"cannot read the snapshot {source}: {exc.strerror or exc}") from None
     file = VaultFile.from_bytes(data)  # what is checked here is exactly what is written below
     vault_key, _ = _unlock_file(ctx, file, reason=f"restore a snapshot of IronDome bunker {bunker}")
+    ctx.note_unfinished_rekey()
     restored = Vault(file, vault_key, path=source)
     try:
         for entry in restored.list():
@@ -1545,11 +1547,7 @@ def _new_slots(
 
 def _staging_files() -> List[Path]:
     """The re-keyed vaults ``_rekey`` builds beside the live one, still there when a re-key did not finish."""
-    try:
-        found = list(paths.home().glob(f"{_STAGING_PREFIX}*{_STAGING_SUFFIX}"))
-    except OSError:
-        return []
-    return sorted(path for path in found if path.is_file() and not path.is_symlink())
+    return caps.rekey_staging_files()
 
 
 def _identity(descriptor: Dict[str, Any]) -> str:
@@ -1770,21 +1768,29 @@ def _retire(
             "audit_archive": str(archived) if archived else None, "leftovers": leftovers}
 
 
+def _show_recovery_keys(ctx: Context, bunker: str, recovery: List[str]) -> None:
+    for index, key in enumerate(recovery):
+        if index:
+            ctx.out.data()  # one key per line, even where each is printed bare
+        _show_recovery(ctx, key, f"bunker {bunker}")
+
+
 def _show_unfinished(ctx: Context, bunker: str, fresh: Vault, recovery: List[str]) -> None:
-    """The re-key stopped after its switch: the new recovery key is the only one that opens the vault, so show it."""
+    """The re-key stopped after its switch: the new recovery key is the only one that opens the vault, so show it.
+
+    *recovery* holds the keys not shown yet (none in human mode, where they go out right after the switch).
+    """
     try:
         if ctx.out.json_mode:
             ctx.out.json({"bunker": bunker, "vault_id": fresh.vault_id.hex(), "entries": len(fresh.entries),
                           "recovery_keys": recovery, "finished": False})
         ctx.out.warn(
             f"the re-key of bunker {bunker} stopped after the new vault key took over, before everything the old "
-            "one opens was destroyed. Run irondome rekey again: it finishes what this one could not."
+            "one opens was destroyed. Until it finishes, no session or grant can be used. Run irondome rekey "
+            "again: it finishes what this one could not."
         )
         if not ctx.out.json_mode:
-            for index, key in enumerate(recovery):
-                if index:
-                    ctx.out.data()
-                _show_recovery(ctx, key, f"bunker {bunker}")
+            _show_recovery_keys(ctx, bunker, recovery)
     except Exception:  # noqa: S110 - this runs while another exception is on its way out; that one is reported
         pass
 
@@ -1823,7 +1829,15 @@ def cmd_rekey(ctx: Context, args: argparse.Namespace) -> int:
             swept = _sweep_staging(old, leftovers)
             fresh, recovery, staging = _rekey(old, password)
             finished = False
+            shown = False
             try:
+                # From the switch on, the new recovery key is the only one that opens the vault: it goes out
+                # before anything that a crash could stop. With --json, stdout holds one document, written at
+                # the end; a re-key killed before then is reported by every later command (caps.unfinished_rekey)
+                # until `irondome rekey` finishes it and shows a new recovery key.
+                if not ctx.out.json_mode:
+                    _show_recovery_keys(ctx, bunker, recovery)
+                    shown = True
                 outcome = _retire(ctx, old, fresh, staging, keep_staging=True)
                 outcome["device_keys_destroyed"] += swept
                 outcome["leftovers"] = leftovers + outcome["leftovers"]
@@ -1836,7 +1850,7 @@ def cmd_rekey(ctx: Context, args: argparse.Namespace) -> int:
                 finished = True
             finally:
                 if not finished:
-                    _show_unfinished(ctx, bunker, fresh, recovery)
+                    _show_unfinished(ctx, bunker, fresh, [] if shown else recovery)
                 fresh.close()
         had_recovery = any(slot.kind == KIND_RECOVERY for slot in old.file.slots)
     finally:
@@ -1858,11 +1872,6 @@ def cmd_rekey(ctx: Context, args: argparse.Namespace) -> int:
         )
     for leftover in outcome["leftovers"]:
         ctx.out.warn(_printable(leftover))
-    if not ctx.out.json_mode:
-        for index, key in enumerate(recovery):
-            if index:
-                ctx.out.data()  # one key per line, even where each is printed bare
-            _show_recovery(ctx, key, f"bunker {bunker}")
     # Last of all, once the recovery key is out: while this file is there, the re-key has not finished.
     with contextlib.suppress(OSError):
         paths.secure_delete(staging)
@@ -1894,10 +1903,17 @@ def _show_rekey(ctx: Context, bunker: str, count: int, slots: List[Dict[str, Any
 
 
 def _recovery_caveat(bunkers: Sequence[str]) -> str:
+    names = list(bunkers)
+    named = names[0] if len(names) < 2 else f"{', '.join(names[:-1])} and {names[-1]}"
+    if len(names) == 1:
+        where = f"any copy of the vault file of bunker {named} that survives elsewhere"
+        which = "a recovery key on paper: destroy it"
+    else:
+        where = f"any copy of the vault files of bunkers {named} that survives elsewhere"
+        which = "recovery keys on paper: destroy them"
     return (
-        f"a recovery key still opens any copy of the vault file of {', '.join(bunkers)} that survives elsewhere "
-        "(a backup, a synced folder, a copy on another disk). nuke cannot reach a recovery key on paper: destroy "
-        "it, and those copies, yourself."
+        f"a recovery key still opens {where} (a backup, a synced folder, a copy on another disk). nuke cannot "
+        f"reach {which}, and those copies, yourself."
     )
 
 
@@ -2063,8 +2079,21 @@ def _yes(value: Any) -> str:
     return {True: "yes", False: "no"}.get(value, "unknown")
 
 
+def _note_unfinished_rekey(report: Dict[str, Any]) -> None:
+    """Add to doctor's *report* the finding for a re-key that stopped after its switch (caps.unfinished_rekey)."""
+    staged = caps.unfinished_rekey()
+    if staged is None:
+        return
+    report.setdefault("findings", []).insert(0, {
+        "severity": "problem", "check": "rekey", "message": caps.unfinished_rekey_warning(staged),
+        "remedy": "irondome rekey",
+    })
+    report["problems"] = int(report.get("problems") or 0) + 1
+
+
 def cmd_doctor(ctx: Context, args: argparse.Namespace) -> int:
     report = doctor.collect()
+    _note_unfinished_rekey(report)
     if ctx.out.json_mode:
         ctx.out.json(report)
         return 1 if doctor.has_problem(report) else 0

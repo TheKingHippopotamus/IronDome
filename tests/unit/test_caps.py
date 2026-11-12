@@ -906,7 +906,7 @@ def test_a_session_is_ended_even_if_that_cannot_be_recorded(vault, monkeypatch):
 
     with monkeypatch.context() as patch:
         patch.setattr(audit, "record", unwritable)
-        with pytest.raises(audit.AuditError, match=r"1 session\(s\) ended, but that could not be recorded"):
+        with pytest.raises(audit.AuditError, match=r"1 session ended, but that could not be recorded"):
             caps.end_sessions(token, vault=vault)
 
     assert not cap_path(token).exists()

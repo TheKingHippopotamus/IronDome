@@ -104,6 +104,22 @@ limited, attributable and revocable, within the limits listed below.
   until it expires; the audit log records each such use. To end a grant
   against such an agent, run `irondome rekey`, which destroys the device
   secret every grant is bound to, and rotate the secrets the grant covered.
+* A re-key (`rekey`, `recovery new`, `recovery remove`) first puts the new
+  vault in place, then destroys what opened the old one: its device keys,
+  snapshots, sessions and grants. It builds the new vault in a staging file
+  (`.tmp-rekey-*.irondome` in the bunker's directory) and deletes that file
+  last. If it is stopped in between (kill -9, a crash, a power cut), that
+  file still holds the live vault's id. While it does, IronDome fails closed:
+  every session and grant is refused, old or new. `status`, `doctor` and
+  every owner command that unlocks warn, and they say to run `irondome
+  rekey`, which finishes the job. Without `--json`, the new recovery key is
+  printed as soon as the new vault is live, before anything a crash could
+  stop. With `--json`, it is only in the one JSON document printed at the
+  end, so a re-key killed before then never shows it. The master password
+  (or Touch ID) still opens the vault, and the next `rekey` shows a new
+  recovery key. A re-key that finished, except for old device keys it could
+  not destroy, keeps the list of those keys in the vault's encrypted index.
+  Every unlock warns about them until a later `rekey` destroys them.
 
 **An agent in your terminal.** Agent tools often run their commands in your
 own terminal session, so IronDome treats such an agent as you for prompts. It

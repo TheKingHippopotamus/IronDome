@@ -224,3 +224,116 @@ def test_a_rekey_killed_before_the_switch_leaves_nothing_behind_after_the_next_o
     assert staging_files() == [] and not (paths.home() / keys.RETIREMENT_FILE).exists()
     assert not (set(device_keys()) & (set(orphans) | set(keys_before)))  # only the new vault's key is left
     assert len(device_keys()) == 1
+
+
+# A re-key killed after its switch, before it could end anything (red-team filesystem:0, the part re-verification
+# found open): the new recovery key was never shown, status, doctor and ls said nothing, and a grant made before
+# it went on returning the secret until the owner happened to re-key again. Now the recovery key goes out right
+# after the switch, every session and grant is refused while the re-key's staging file holds the live vault's id,
+# and every owner command says so and how to finish.
+
+KILLED_AFTER_SWITCH = {
+    "rekey": ["rekey", "--yes", "--password-stdin"],
+    "rekey-json": ["--json", "rekey", "--yes", "--password-stdin"],
+    "recovery-new": ["recovery", "new", "--password-stdin"],
+}
+
+
+@pytest.mark.parametrize("command", sorted(KILLED_AFTER_SWITCH))
+def test_a_rekey_killed_after_the_switch_fails_closed_and_every_owner_command_says_so(
+    cli: CLI, isolated: Path, command: str
+) -> None:
+    build()
+    old_id = VaultFile.load().vault_id
+    session, grant, old_copy, old_keys, stolen = taken_before(isolated)
+
+    killed = run_with_fault("kill-after-switch", *KILLED_AFTER_SWITCH[command])
+    assert killed.returncode == -signal.SIGKILL, killed.stderr
+    current = VaultFile.load()
+    assert current.vault_id != old_id
+    staged = staging_files()
+    assert len(staged) == 1 and VaultFile.load(staged[0]).vault_id == current.vault_id
+
+    # The new recovery key was out before the kill, and it is the one that opens the vault now. With --json,
+    # stdout holds one document, written at the end, so it was never shown: the warnings below and the master
+    # password remain, and the next re-key shows a new one.
+    shown = RECOVERY_KEY.findall(killed.stdout)
+    if command == "rekey-json":
+        assert killed.stdout == ""
+        with opened() as vault:
+            assert len(vault.entries) == 2
+    else:
+        assert len(shown) == 1, killed.stdout
+        with Vault(current, unlock(current, recovery_key=shown[0])) as vault:
+            assert len(vault.entries) == 2
+
+    # Fail closed: the grant made before the re-key, through the real command line and the library.
+    used = cli("get", "GITHUB_TOKEN", env={"IRONDOME_GRANT": grant})
+    assert used.returncode == AuthError.exit_code and TOKEN not in used.stdout + used.stderr
+    assert "a re-key of its vault has not finished" in used.stderr and "irondome rekey" in used.stderr
+    with pytest.raises(AuthError, match="has not finished"):
+        caps.open_grant(grant, consume=False)
+    with pytest.raises(AuthError, match="has not finished"):
+        caps.open_grant(grant)
+    made = cli("grant", "create", "github", "--ttl", "10m", "--password-stdin", stdin=PASSWORD + "\n")
+    assert made.returncode == AuthError.exit_code and "has not finished" in made.stderr, made.stderr
+
+    # Every owner command says so, and how to finish: status and doctor without a key, ls once unlocked.
+    status = cli("status")
+    assert "UNFINISHED" in status.stdout and "irondome rekey" in status.stdout
+    assert "stopped after the new vault key took over" in status.stderr
+    document = json.loads(ok(cli("status", "--json")).stdout)
+    assert document["unfinished_rekey"] == str(staged[0])
+    doctor = cli("doctor", "--json")
+    assert doctor.returncode == 1
+    finding = json.loads(doctor.stdout)["findings"][0]
+    assert finding["severity"] == "problem" and finding["check"] == "rekey" and finding["remedy"] == "irondome rekey"
+    listed = ok(cli("ls", "--password-stdin", stdin=PASSWORD + "\n"))
+    assert listed.stderr.count("stopped after the new vault key took over") == 1, listed.stderr
+    assert "Finish it with: irondome rekey" in listed.stderr
+
+    # The next re-key finishes it: a new recovery key, nothing from before opens, and nothing warns any more.
+    document = rekey(cli)
+    assert document["finished"] is True and len(document["recovery_keys"]) == 1
+    nothing_taken_before_opens(session, grant, old_copy, old_keys, stolen)
+    assert "re-key" not in cli("status").stdout + cli("status").stderr
+    assert "re-key" not in ok(cli("ls", "--password-stdin", stdin=PASSWORD + "\n")).stderr
+
+
+def test_a_session_or_grant_is_refused_only_while_the_staging_file_holds_the_live_vault_id(isolated: Path) -> None:
+    build()
+    with opened() as vault:
+        grant, _info = caps.create_grant(vault, ["GITHUB_TOKEN"], ttl=600)
+        session = caps.create_session(vault, ttl=600)
+    live = paths.vault_file()
+    other = paths.home() / ".tmp-rekey-0000000000000000.irondome"
+    other.write_bytes(b"torn: a re-key killed while writing it, before any switch")
+    assert caps.unfinished_rekey() is None
+    with caps.open_grant(grant, consume=False):
+        pass
+    staged = paths.home() / ".tmp-rekey-1111111111111111.irondome"
+    shutil.copyfile(str(live), str(staged))  # the live vault's own id: a re-key that switched and did not finish
+    assert caps.unfinished_rekey() == staged
+    with pytest.raises(AuthError, match="has not finished"):
+        caps.open_session(session, VaultFile.load())
+    with pytest.raises(AuthError, match="has not finished"):
+        caps.open_grant(grant, consume=False)
+    with opened() as vault, pytest.raises(AuthError, match="has not finished"):
+        caps.create_session(vault, ttl=600)
+    staged.unlink()
+    with caps.open_grant(grant, consume=False):
+        pass
+
+
+def test_a_rekey_plan_left_in_the_index_is_reported_by_the_next_unlock(cli: CLI) -> None:
+    """A re-key that finished except for an old device key it could not destroy leaves its plan in the index."""
+    build()
+    with opened() as vault:
+        vault.meta[caps.REKEY_PLAN] = {
+            "from": "00" * 16, "devices": [{"label": "the keyslot 'password'", "device": {"backend": "software"}}],
+        }
+        vault.commit()
+    assert caps.unfinished_rekey() is None  # no staging file: sessions and grants are not refused for this
+    listed = ok(cli("ls", "--password-stdin", stdin=PASSWORD + "\n"))
+    assert "the last re-key of bunker alpha did not finish: 1 old device key of the vault it replaced could not " \
+        "be destroyed. Finish it with: irondome rekey" in " ".join(listed.stderr.split())

@@ -619,7 +619,8 @@ class SecureEnclaveBackend(DeviceBackend):
             else:
                 destroyed += 1
         if survivors:
-            raise HardwareError(f"could not destroy the Secure Enclave key file(s): {', '.join(survivors)}")
+            what = "the Secure Enclave key file" if len(survivors) == 1 else "the Secure Enclave key files"
+            raise HardwareError(f"could not destroy {what}: {', '.join(survivors)}")
         return destroyed
 
     def _holds_key(self, path: Path) -> bool:

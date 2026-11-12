@@ -1038,7 +1038,8 @@ def check_no_network(box: Sandbox) -> CheckResult:
         box.guard()
         erased = nuke.execute()
     if guard.attempts:
-        return _failed(f"something tried to create a socket {guard.attempts} time(s)")
+        times = "once" if guard.attempts == 1 else f"{guard.attempts} times"
+        return _failed(f"something tried to create a socket {times}")
     if not report.ok or result.code != 0 or not erased.success:
         return _failed("the work done with sockets switched off did not complete")
     return _passed(

@@ -2149,7 +2149,7 @@ def test_destroy_all_drops_records_of_indices_that_are_already_gone(fake, backen
 def test_destroy_all_raises_when_any_key_survives_and_keeps_its_record(fake, backend):
     made = [enroll(backend)[0] for _ in range(2)]
     fake.owner_auth_set = True
-    with pytest.raises(HardwareError, match=r"2 TPM device key\(s\) could not be erased.*owner password"):
+    with pytest.raises(HardwareError, match=r"2 TPM device keys could not be erased.*owner password"):
         backend.destroy_all()
     assert registry() == sorted(item["nv_index"] for item in made)
     assert all(backend.exists(item) for item in made)
@@ -2161,7 +2161,7 @@ def test_destroy_all_raises_when_any_key_survives_and_keeps_its_record(fake, bac
 def test_destroy_all_carries_on_past_a_failure(fake, backend):
     made = sorted(enroll(backend)[0]["nv_index"] for _ in range(3))
     fake.once("tpm2_nvundefine", lambda arguments: failed("nvundefine_owner_auth_set"))
-    with pytest.raises(HardwareError, match=rf"1 TPM device key\(s\) could not be erased \({made[0]}: "):
+    with pytest.raises(HardwareError, match=rf"1 TPM device key could not be erased \({made[0]}: "):
         backend.destroy_all()
     assert registry() == [made[0]] and fake.handles() == {made[0]}
 
@@ -2169,7 +2169,7 @@ def test_destroy_all_carries_on_past_a_failure(fake, backend):
 def test_destroy_all_with_the_tpm_unreachable_raises_and_keeps_every_record(fake, backend):
     made = sorted(enroll(backend)[0]["nv_index"] for _ in range(5))
     fake.unreachable = True
-    with pytest.raises(HardwareError, match=r"5 TPM device key\(s\) could not be erased.*and 2 more"):
+    with pytest.raises(HardwareError, match=r"5 TPM device keys could not be erased.*and 2 more"):
         backend.destroy_all()
     assert registry() == made
 
@@ -2777,7 +2777,7 @@ def test_nothing_runs_off_linux(backend, monkeypatch):
     with pytest.raises(HardwareError, match="TPM of a Linux machine"):
         backend.exists(descriptor())
     linux_tpm._save_registry([INDEX])
-    with pytest.raises(HardwareError, match=r"1 TPM device key\(s\) could not be erased"):
+    with pytest.raises(HardwareError, match=r"1 TPM device key could not be erased"):
         backend.destroy_all()
     assert registry() == [INDEX]
 
@@ -3513,7 +3513,7 @@ def test_real_owner_password_makes_the_backend_unavailable_with_the_remedy(chip)
         assert registry() == [made["nv_index"]]
         with pytest.raises(HardwareError, match="owner password"):
             chip.destroy(made)
-        with pytest.raises(HardwareError, match=r"1 TPM device key\(s\) could not be erased"):
+        with pytest.raises(HardwareError, match=r"1 TPM device key could not be erased"):
             chip.destroy_all()
         assert chip.exists(made) and registry() == [made["nv_index"]]
         assert unseal(chip, made) == secret, "reading needs only the index's own authorisation"
@@ -3586,7 +3586,7 @@ def test_real_unreachable_tpm_is_an_error_and_never_an_empty_answer(chip, monkey
             chip.exists(made)
         with pytest.raises(HardwareError):
             chip.destroy(made)
-        with pytest.raises(HardwareError, match=r"1 TPM device key\(s\) could not be erased"):
+        with pytest.raises(HardwareError, match=r"1 TPM device key could not be erased"):
             chip.destroy_all()
         with pytest.raises(HardwareError) as caught:
             unseal(chip, made)

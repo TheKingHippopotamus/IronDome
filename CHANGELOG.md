@@ -159,7 +159,12 @@ The new architecture removes all of them:
 - An interrupted keyslot change (`passwd`, `auth`) is finished by the next
   command that opens the vault. A `rekey` that fails after the new vault key
   took over still shows the new recovery key, and the next `rekey` finishes
-  destroying what the old key opened.
+  destroying what the old key opened. Without `--json`, `rekey` and `recovery
+  new` print the new recovery key as soon as the new vault is live. With
+  `--json`, it is only in the final JSON document. If a re-key is killed
+  after its switch (kill -9, a power cut), every session and grant is refused
+  until `rekey` is run again. `status`, `doctor` and every owner command that
+  unlocks say so, and say how to finish.
 - `migrate` reads the 3.x key of a vault without a master password with
   `/usr/bin/security` on macOS and `secret-tool` on Linux; the `keyring`
   package is no longer used. Elsewhere, give the key with `--legacy-key`.

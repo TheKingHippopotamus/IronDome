@@ -1020,7 +1020,7 @@ def test_nuke_destroys_every_bunker(cli: CLI, isolated: Path) -> None:
     result = ok(cli("nuke", "--yes-destroy-everything", "--password-stdin", stdin=lines(PASSWORD)))
     assert "alpha, bravo" in result.stdout
     assert str(foreign) in result.stderr and "not created by IronDome" in result.stderr
-    assert "a recovery key still opens any copy of the vault file of alpha, bravo" in result.stderr
+    assert "a recovery key still opens any copy of the vault files of bunkers alpha and bravo" in result.stderr
     assert sorted(str(path) for path in paths.root().rglob("*")) == [str(foreign)]
     assert not paths.device_root().exists()
     assert foreign.read_text(encoding="utf-8") == "not IronDome's\n"
