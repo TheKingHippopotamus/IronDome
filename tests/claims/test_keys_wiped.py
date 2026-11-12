@@ -1,9 +1,15 @@
 """Claim ``keys-wiped``: key material is wiped from memory.
 
-Statement: the master password, the Argon2id output, the device secret, the
-key-encryption key, the vault key and every subkey exist only in locked memory
-outside the Python heap and are overwritten when the vault is locked. A scan
-of the process's entire address space afterwards finds no copy of any of them.
+Statement: IronDome keeps its copies of the master password, the Argon2id
+output, the device secret, the key-encryption key, the vault key and every
+subkey only in locked memory outside the Python heap, and overwrites them when
+the vault is locked; Argon2id and HKDF write their output straight into those
+buffers. After a full session, a scan of the process's entire address space
+finds no copy of any of them.
+
+Boundary tested here: the copies pyca/cryptography (OpenSSL) makes inside
+Argon2id and HKDF, which IronDome cannot wipe, are the only ones a scan with
+freed memory unzeroed, or one made right after a derivation, may find.
 
 How it is proved: a fresh interpreter (``irondome.selftest.probe_main``)
 wraps ``irondome.crypto.argon2id`` and ``hkdf``, the device backend's
@@ -158,8 +164,8 @@ def test_a_key_dropped_as_bytes_without_wiping_is_still_found(probes):
     assert len(dropped) == 1 and dropped[0]["hits"]
 
 
-def test_the_probe_judged_by_irondome_verify_passes(probes):
-    result = selftest.evaluate_keys_probe(probes["clean"], probes["control"])
+def test_the_probe_judged_by_irondome_verify_passes(probes, derivation):
+    result = selftest.evaluate_keys_probe(probes["clean"], probes["control"], probes.get("unzeroed"), derivation)
     assert result.status == selftest.PASS, result.detail
 
 
@@ -171,22 +177,45 @@ def test_a_non_ascii_master_password_leaves_no_copy_in_any_form(probes):
     assert leftovers(document) == []
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="on Linux the allocator never zeroes what is freed")
-def test_on_macos_no_key_is_left_even_when_the_system_does_not_zero_freed_memory(probes):
-    """The statement says the keys are overwritten: by IronDome, not by the luck of the allocator.
+#: The copies the boundary names, as the probe labels them. Argon2id in pyca/cryptography (OpenSSL) copies the
+#: password it is given into system-malloc memory and frees it without overwriting it; HKDF leaves a copy of
+#: the key it derives on the C stack and in memory it frees. For an ASCII password both labels are the same bytes.
+ARGON2_INPUT = ("master password", "master password as fed to Argon2id")
+MADE_INSIDE_CRYPTOGRAPHY = ARGON2_INPUT + ("HKDF output",)
 
-    With ``MallocZeroOnFree=0`` macOS behaves like glibc: a block freed without
-    wiping keeps its bytes until it is reused.
+
+def found_labels(document: Dict[str, Any]) -> List[str]:
+    return sorted(needle["label"] for needle in key_needles(document) if needle["hits"])
+
+
+def assert_argon2_input_copies_are_in_system_malloc(document: Dict[str, Any]) -> None:
+    """Python keeps objects this small in its own arenas (``anonymous`` memory), and IronDome its keys in locked
+    pages: a copy in ``MALLOC_*`` memory is one that native code made with malloc."""
+    for needle in key_needles(document):
+        if needle["label"] in ARGON2_INPUT:
+            assert all("MALLOC_" in hit["where"] for hit in needle["hits"]), needle
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="on Linux the allocator never zeroes what is freed")
+def test_boundary_on_macos_without_zero_on_free_only_the_copy_argon2id_makes_of_the_password_can_be_left(probes):
+    """With ``MallocZeroOnFree=0`` macOS behaves like glibc: a block freed without wiping keeps its bytes.
+
+    Then the scan after the vault is locked may find the master password, in
+    the copy Argon2id makes of it inside pyca/cryptography (OpenSSL) and frees
+    without overwriting, and nothing else. Whether that block is still unused
+    when the scan runs is up to the allocator, so this asserts what may be
+    found and where, never that a copy is found.
     """
     document = probes["unzeroed"]
     dropped = [needle for needle in document["needles"] if needle["kind"] == "control-dropped"]
     assert len(dropped) == 1 and dropped[0]["hits"]
-    assert leftovers(document) == []
+    assert [label for label in found_labels(document) if label not in ARGON2_INPUT] == []
+    assert_argon2_input_copies_are_in_system_malloc(document)
 
 
 @pytest.fixture(scope="module")
 def derivation(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Any]:
-    """The first half of the statement, where the keys are made: they exist only in locked memory.
+    """The first half of the statement, where the keys are made: IronDome's copies exist only in locked memory.
 
     The ``kdf`` probe normalises the master password, stretches it with
     Argon2id and expands that with HKDF, twice, as an unlock does, and
@@ -212,12 +241,64 @@ def test_the_derivation_probe_recorded_every_form_and_saw_its_control(derivation
     assert len(dropped) == 1 and dropped[0]["hits"]
 
 
-def test_hkdf_leaves_no_copy_of_the_key_it_derives(derivation):
-    assert leftovers_of(derivation, "HKDF output") == []
+def test_boundary_right_after_a_derivation_the_only_copies_are_those_argon2id_and_hkdf_make_inside_cryptography(
+    derivation,
+):
+    """Searched at once, with freed memory unzeroed: what Argon2id and HKDF copy inside pyca/cryptography is there.
+
+    Argon2id's copy of the password it was fed, in system-malloc memory, and
+    HKDF's copy of its output, on the C stack and in freed memory. No copy of
+    the Argon2id output, of the password as typed, or of any form IronDome
+    itself makes. Which of the named copies a run finds is up to the
+    allocator and the stack, so this asserts only what may be found, and where.
+    """
+    assert [label for label in found_labels(derivation) if label not in MADE_INSIDE_CRYPTOGRAPHY] == []
+    assert_argon2_input_copies_are_in_system_malloc(derivation)
 
 
-def test_argon2id_leaves_no_copy_of_the_password_or_of_its_output(derivation):
-    assert leftovers_of(derivation, "master password", "master password as fed to Argon2id", "Argon2id output") == []
+def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_write_straight_into_them(monkeypatch):
+    """What IronDome controls: pyca/cryptography gets views of IronDome's own buffers, in and out.
+
+    ``derive_into``, never ``derive``: no immutable ``bytes`` of a key is ever
+    handed back. What the library copies on the way is the boundary above.
+    """
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+    from irondome import crypto
+    from irondome.secmem import SecureBuffer
+
+    calls: List[Any] = []
+
+    def spying(real: Any) -> Any:
+        def make(*args: Any, **kwargs: Any) -> Any:
+            kdf = real(*args, **kwargs)
+
+            class Recorder:
+                def derive_into(self, material: Any, buffer: Any) -> Any:
+                    written = kdf.derive_into(material, buffer)
+                    calls.append((real.__name__, material, buffer))
+                    return written
+
+                def derive(self, *_: Any) -> Any:
+                    raise AssertionError("derive returns the key as immutable bytes")
+
+            return Recorder()
+
+        return make
+
+    monkeypatch.setattr(crypto, "Argon2id", spying(crypto.Argon2id))
+    monkeypatch.setattr(crypto, "HKDF", spying(crypto.HKDF))
+    salt = bytes(range(16))
+    with SecureBuffer.from_buffer(b"a test password") as password:
+        with crypto.argon2id(password, salt, crypto.Argon2Params(memory_kib=19 * 1024)) as stretched:
+            with crypto.hkdf(stretched, b"irondome/test", salt) as derived:
+                assert [name for name, _, _ in calls] == ["Argon2id", "HKDF"]
+                for (_, material, buffer), source, out in zip(calls, (password, stretched), (stretched, derived)):
+                    assert type(material) is memoryview and type(buffer) is memoryview and not buffer.readonly
+                    assert bytes(material) == bytes(source.view()) and bytes(buffer) == bytes(out.view())
+                expected = HKDF(algorithm=hashes.SHA256(), length=32, salt=salt, info=b"irondome/test")
+                assert bytes(derived.view()) == expected.derive(bytes(stretched.view()))
 
 
 def test_normalising_a_non_ascii_password_leaves_no_str_copy_of_it(derivation):

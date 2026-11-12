@@ -47,7 +47,12 @@ Each is now a claim in `docs/CLAIMS.md` with the tests that hold it, and
   and read directly into pages outside the Python heap, locked into RAM where
   the system allows it (`irondome doctor` warns when it does not), and
   overwritten when the vault locks. A test scans the whole address space of
-  the process on macOS and Linux and requires zero hits.
+  the process on macOS and Linux after a full session and requires zero hits.
+  Two copies stay outside IronDome's reach: Argon2id in `cryptography`
+  (OpenSSL) copies the master password into memory it frees without
+  overwriting, and HKDF leaves a copy of each key it derives on the C stack
+  and in freed memory. A scan with freed memory left unzeroed, or right after
+  a derivation, finds them; the claim's boundary says so and tests it.
 - **"The cipher is AES-128."** (3.x PyPI page.) Fernet's AES-128-CBC with
   HMAC is replaced by AES-256-GCM, with one key per entry derived by HKDF.
 
@@ -173,7 +178,9 @@ The new architecture removes all of them:
 ### Still true
 
 No independent audit. Decrypted entries are ordinary Python strings while a
-command runs. A recovery key, and a portable backup made with
+command runs. Argon2id and HKDF inside `cryptography` leave copies of key
+material that IronDome cannot wipe. Intel Macs are untested, and installing
+there builds `cryptography` from source. A recovery key, and a portable backup made with
 `irondome export`, outlive `nuke`. Whole-file rollback is not detected. A
 grant's use count and a revoke rest on deleting its file, so a copy of the
 file put back works again until the grant expires (`rekey` ends it). See

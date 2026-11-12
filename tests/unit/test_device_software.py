@@ -782,7 +782,8 @@ def test_a_passive_choice_builds_nothing_and_the_real_one_does(monkeypatch):
 @pytest.mark.parametrize(
     "platform, words",
     [
-        ("darwin", ["Secure Enclave", "Apple-silicon", "T2", "Xcode Command Line Tools", "xcode-select --install"]),
+        ("darwin", ["Secure Enclave", "Apple-silicon", "Intel Macs are untested",
+                    "Xcode Command Line Tools", "xcode-select --install"]),
         ("linux", ["TPM 2.0", "firmware setup", "/dev/tpmrm0", "tss", "sudo apt install tpm2-tools"]),
         ("win32", ["no chip backend for this system"]),
     ],

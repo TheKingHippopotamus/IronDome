@@ -882,7 +882,7 @@ def test_normalise_password_returns_a_copy_in_locked_memory():
 
 @pytest.mark.skipif(not CPYTHON, reason="in-place zeroing of immutable objects is CPython-specific")
 def test_the_transient_copies_made_while_normalising_are_zeroed(monkeypatch):
-    """A non-ASCII password passes through a str and a bytes object; neither may outlive the call."""
+    """A non-ASCII password passes through two str objects, which may not outlive the call, and no bytes object."""
     strings: List[str] = []
     encoded: List[bytes] = []
     real_normalize = unicodedata.normalize
@@ -905,10 +905,30 @@ def test_the_transient_copies_made_while_normalising_are_zeroed(monkeypatch):
         result = normalised(password)
 
     assert result == unicodedata.normalize("NFKC", password.decode("utf-8")).encode("utf-8")
-    assert len(strings) == 2 and len(encoded) == 1
+    assert len(strings) == 2 and encoded == [], "a bytes copy of the password was made"
     for text in strings:
         assert len(text) >= 2 and all(ord(char) == 0 for char in text), "a str copy of the password survived"
-    assert encoded[0] == bytes(len(encoded[0])), "a bytes copy of the password survived"
+
+
+@given(st.binary(min_size=1, max_size=80))
+@settings(max_examples=500, deadline=None)
+def test_the_hand_made_utf8_decoder_accepts_exactly_what_python_accepts(data):
+    from irondome.keys import _decode_utf8
+
+    try:
+        expected = data.decode("utf-8")
+    except UnicodeDecodeError:
+        expected = None
+    assert _decode_utf8(memoryview(data)) == expected
+
+
+@given(st.text(min_size=1, max_size=60))
+@settings(max_examples=300, deadline=None)
+def test_the_hand_made_utf8_encoder_matches_python(text):
+    from irondome.keys import _encode_utf8
+
+    with _encode_utf8(text) as buffer:
+        assert bytes(buffer.view()) == text.encode("utf-8", "surrogatepass")
 
 
 # ---------------------------------------------------------------------------

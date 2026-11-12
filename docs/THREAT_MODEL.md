@@ -65,8 +65,10 @@ two parts.
   keylogger) the next time you type it. Nothing a userspace program does can
   prevent that.
 
-**While a command is running:** IronDome keeps the window small. Key material
-is held only in locked memory and wiped when the command finishes. IronDome
+**While a command is running:** IronDome keeps the window small. IronDome
+holds key material only in locked memory and wipes it when the command
+finishes (the copies `cryptography` makes inside Argon2id and HKDF are out of
+its reach: see the limits below). IronDome
 turns off core dumps for itself, and on Linux marks itself non-dumpable so
 other processes of the same user cannot attach to it or read its memory
 (claim [`process-hardened`](CLAIMS.md#process-hardened); `IRONDOME_DEBUG=1`
@@ -152,7 +154,16 @@ with the old key and shows what it held then.
 * **No independent audit.** The test suite is ours. Nobody outside the project
   has reviewed the cryptography. Treat IronDome as beta software.
 * **Decrypted entries are ordinary Python strings** for as long as a command
-  runs. Only *key material* is guaranteed to stay in locked, wiped memory.
+  runs. Only IronDome's own copies of *key material* stay in locked, wiped
+  memory.
+* **Copies made inside `cryptography`.** Argon2id copies the master password
+  it is given into memory it frees without overwriting, and HKDF leaves a copy
+  of each key it derives on the C stack and in freed memory. They last until
+  that memory is reused, and IronDome cannot wipe them. A non-ASCII master
+  password also leaves Python's `unicodedata` working copies in freed memory.
+  See the boundary of [`keys-wiped`](CLAIMS.md#keys-wiped).
+* **Intel Macs are untested.** `cryptography` publishes no macOS wheel for
+  them, so installing there builds it from source (Rust and OpenSSL needed).
 * **Whole-file rollback is not detected.** Restoring an older copy of the
   entire vault file yields a valid older vault. (Individual records cannot be
   rolled back or swapped.)

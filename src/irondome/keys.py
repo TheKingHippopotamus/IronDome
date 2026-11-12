@@ -241,8 +241,13 @@ def normalise_password(password: BufferLike) -> SecureBuffer:
     ASCII passwords are used exactly as typed. Anything else is normalised to
     Unicode NFKC first, so the same passphrase typed on a different keyboard
     or operating system still produces the same key. (Normalising needs a
-    transient ``str``; that only happens for non-ASCII passwords, and on
-    CPython the transient copies are zeroed before this function returns.)
+    ``str``, so only non-ASCII passwords pass through one. IronDome decodes
+    and encodes it by hand, so that the two ``str`` objects it makes, the text
+    as typed and as normalised, are the only copies it makes, and on CPython
+    it zeroes both in place before this function returns. Python's
+    ``unicodedata.normalize`` keeps working copies of its own, as 4-byte code
+    points, and frees them without overwriting them: IronDome cannot reach
+    those. See the boundary of the ``keys-wiped`` claim.)
     """
     view = memoryview(password.view() if isinstance(password, SecureBuffer) else password)
     if len(view) == 0:
@@ -251,25 +256,89 @@ def normalise_password(password: BufferLike) -> SecureBuffer:
         return SecureBuffer.from_buffer(view)
     import unicodedata
 
-    raw = bytes(view)
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
+    text = _decode_utf8(view)
+    if text is None:
         return SecureBuffer.from_buffer(view)  # not text: use the bytes as they are
-    finally:
-        wipe_bytes(raw)
-    # Normalising needs these three transient copies. Each is zeroed in place
-    # the moment it has served its purpose (CPython; elsewhere they are freed).
     normalised = text
-    encoded = b""
     try:
         normalised = unicodedata.normalize("NFKC", text)
-        encoded = normalised.encode("utf-8")
-        return SecureBuffer.from_buffer(encoded)
+        return _encode_utf8(normalised)
     finally:
-        wipe_bytes(encoded)
         _wipe_str(normalised)
         _wipe_str(text)
+
+
+def _decode_utf8(view: memoryview) -> Optional[str]:
+    """*view* decoded as strict UTF-8 (exactly what Python's own codec accepts), or None if it is not UTF-8.
+
+    Decoded one code point at a time and joined once, so the ``str`` returned
+    is the only copy of the text. ``bytes.decode`` builds its result in a
+    buffer sized for the worst case and shrinks it at the end; when the
+    allocator moves the block (CPython 3.9 does, for this size), a whole copy
+    of the text stays behind in freed memory.
+    """
+    chars: List[str] = []
+    size = len(view)
+    index = 0
+    while index < size:
+        lead = view[index]
+        if lead < 0x80:
+            point, extra, smallest = lead, 0, 0
+        elif 0xC2 <= lead <= 0xDF:
+            point, extra, smallest = lead & 0x1F, 1, 0x80
+        elif 0xE0 <= lead <= 0xEF:
+            point, extra, smallest = lead & 0x0F, 2, 0x800
+        elif 0xF0 <= lead <= 0xF4:
+            point, extra, smallest = lead & 0x07, 3, 0x10000
+        else:
+            return None
+        if index + extra >= size:
+            return None
+        for offset in range(1, extra + 1):
+            follow = view[index + offset]
+            if follow & 0xC0 != 0x80:
+                return None
+            point = point << 6 | follow & 0x3F
+        if point < smallest or 0xD800 <= point <= 0xDFFF or point > 0x10FFFF:
+            return None
+        chars.append(chr(point))  # one character: never a copy of the text
+        index += extra + 1
+    return "".join(chars)  # sized from its parts: one allocation, never resized
+
+
+def _encode_utf8(text: str) -> SecureBuffer:
+    """*text* as UTF-8, written straight into locked memory.
+
+    ``str.encode`` builds a short result in a buffer on the C stack and copies
+    it into a ``bytes`` object; both would be copies of the password.
+    """
+    length = 0
+    for char in text:
+        point = ord(char)
+        length += 1 if point < 0x80 else 2 if point < 0x800 else 3 if point < 0x10000 else 4
+    out = SecureBuffer(length)
+    try:
+        view = out.view()
+        position = 0
+        for char in text:
+            point = ord(char)
+            if point < 0x80:
+                count, lead = 1, 0
+            elif point < 0x800:
+                count, lead = 2, 0xC0
+            elif point < 0x10000:
+                count, lead = 3, 0xE0
+            else:
+                count, lead = 4, 0xF0
+            for offset in range(count - 1, 0, -1):
+                view[position + offset] = 0x80 | point & 0x3F
+                point >>= 6
+            view[position] = lead | point
+            position += count
+    except BaseException:
+        out.wipe()
+        raise
+    return out
 
 
 def format_recovery_key(raw: BufferLike) -> str:

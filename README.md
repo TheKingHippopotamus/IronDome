@@ -54,7 +54,9 @@ audit log.
 $ pipx install IronDome        # or: uv tool install IronDome / pip install IronDome
 ```
 
-Python 3.9.2 or newer, tested on 3.9 through 3.14. macOS and Linux. On a Mac, Touch ID
+Python 3.9.2 or newer, tested on 3.9 through 3.14. macOS on Apple silicon, and Linux.
+Intel Macs are untested: `cryptography` publishes no macOS wheel for them, so installing
+there builds it from source, which needs Rust and OpenSSL. On a Mac, Touch ID
 and Secure Enclave support compiles a 250-line Swift helper on first use (needs the
 Xcode Command Line Tools; nothing is downloaded). On Linux the TPM 2.0 is reached
 through `tpm2-tools`. Without a usable chip or those tools, the device key is a
@@ -174,7 +176,7 @@ narrow, short-lived grants, and rotate what they used.
 | Device binding | Secure Enclave (macOS) · TPM 2.0 NV storage (Linux) · file-based fallback, labelled as such |
 | Touch ID | Enforced by the Secure Enclave on the key operation, not by a prompt in front of a readable key |
 | Wrong guesses | On a TPM, checked and rate-limited by the chip |
-| Memory | Keys live in locked pages outside the Python heap and are wiped; a test scans process memory to prove it |
+| Memory | IronDome keeps keys in locked pages outside the Python heap and wipes them; a test scans process memory to prove it. Argon2id and HKDF inside the `cryptography` library leave copies IronDome cannot wipe (see the claim's boundary) |
 | Self-destruct | `irondome nuke` destroys the device secrets first: a restored copy of the vault no longer opens with the master password (a recovery key you kept still opens it) |
 | Network | None: no module imports a networking library, and every command works with socket creation disabled |
 | Dependencies | One: [`cryptography`](https://cryptography.io) |
@@ -200,7 +202,8 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
 * **It cannot protect you from malware that already runs as you** while a vault
   is open, or from a compromised operating system.
 * **Decrypted entries are ordinary strings** for as long as a command runs.
-  Only key material is guaranteed to stay in locked, wiped memory.
+  Only IronDome's own copies of key material stay in locked, wiped memory:
+  Argon2id and HKDF inside `cryptography` leave copies it cannot wipe.
 * **Masking stops accidents, not intent.** A command that transforms a secret
   on purpose gets it through, and a `--reveal` grant or an entry marked
   `--agent reveal` lets an agent see the value.

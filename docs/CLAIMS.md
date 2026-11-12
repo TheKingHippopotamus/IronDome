@@ -11,7 +11,7 @@ Run the checks on your own machine with `irondome verify` (`irondome verify --cl
 | Claim | Promise | Platforms | Tests | On your machine |
 | --- | --- | --- | --- | --- |
 | [`device-bound`](#device-bound) | A copy of the vault is useless without the machine | macOS, Linux | 12 | `device_bound` |
-| [`key-in-hardware`](#key-in-hardware) | On a Mac or Linux with a TPM 2.0, the device secret is held by the security chip | macOS, Linux | 9 | `key_in_hardware` |
+| [`key-in-hardware`](#key-in-hardware) | On an Apple-silicon Mac or Linux with a TPM 2.0, the device secret is held by the security chip | macOS, Linux | 9 | `key_in_hardware` |
 | [`biometric-enforced-by-chip`](#biometric-enforced-by-chip) | Touch ID is enforced by the Secure Enclave, not by IronDome | macOS | 12 | `biometric_enforced` |
 | [`tpm-rate-limit`](#tpm-rate-limit) | On Linux the TPM checks the password and rate-limits guesses | Linux | 8 | test suite only |
 | [`crypto-erase`](#crypto-erase) | nuke makes every copy of the vault unreadable | macOS, Linux | 13 | `crypto_erase` |
@@ -73,11 +73,11 @@ Tests (12):
 
 ## key-in-hardware
 
-**On a Mac or Linux with a TPM 2.0, the device secret is held by the security chip**
+**On an Apple-silicon Mac or Linux with a TPM 2.0, the device secret is held by the security chip**
 
-macOS: the device secret is the result of a key agreement with a P-256 private key that is generated inside the Secure Enclave and never leaves it; a key blob from any other Secure Enclave is rejected. Linux: the device secret is stored in a TPM 2.0 NV index and appears nowhere on disk.
+macOS on Apple silicon: the device secret is the result of a key agreement with a P-256 private key that is generated inside the Secure Enclave and never leaves it; a key blob from any other Secure Enclave is rejected. Linux: the device secret is stored in a TPM 2.0 NV index and appears nowhere on disk.
 
-*Where it stops:* Needs a Secure Enclave (every Apple-silicon Mac, Intel Macs with a T2 chip) or a TPM 2.0 the user may access. Without one, IronDome uses the file-based backend and says so in `irondome status`. Windows has no hardware backend yet.
+*Where it stops:* Needs the Secure Enclave of an Apple-silicon Mac, or a TPM 2.0 the user may access. Intel Macs, T2 chip or not, are untested and not supported: cryptography publishes no macOS wheel for them, so installing there builds it from source, which needs Rust and OpenSSL. Without a chip, IronDome uses the file-based backend and says so in `irondome status`. Windows has no hardware backend yet.
 
 - Platforms: macOS, Linux
 - Closes L1: 3.x: key protection was software-only (no TPM, no Secure Enclave).
@@ -177,9 +177,9 @@ Tests (13):
 
 **Key material is wiped from memory**
 
-The master password, the Argon2id output, the device secret, the key-encryption key, the vault key and every subkey exist only in locked memory outside the Python heap and are overwritten when the vault is locked. A scan of the process's entire address space afterwards finds no copy of any of them.
+IronDome keeps its copies of the master password, the Argon2id output, the device secret, the key-encryption key, the vault key and every subkey only in locked memory outside the Python heap, and overwrites them when the vault is locked; Argon2id and HKDF write their output straight into those buffers. After a full session, a scan of the process's entire address space finds no copy of any of them.
 
-*Where it stops:* Decrypted entries are ordinary Python strings for as long as a command runs. Session and grant tokens are bearer secrets that live in your shell's environment by design. The recovery key is text you are shown once and may type back: as text it is an ordinary Python string, not locked memory, for as long as a command holds it. A process with debugger rights over a running IronDome can read anything.
+*Where it stops:* pyca/cryptography and the OpenSSL it bundles make copies IronDome cannot wipe: Argon2id copies the master password it is given into memory it frees without overwriting, and HKDF leaves a copy of each key it derives on the C stack and in memory it frees. They last until that memory is reused. On macOS, which zeroes small freed blocks by default, the scan after a full session finds neither; with that zeroing turned off (MallocZeroOnFree=0, as glibc on Linux always behaves) the scan can find the password copy, and a scan made right after a derivation finds both. A non-ASCII master password is normalised with Python's unicodedata, which frees its own working copies of the text, as 4-byte code points, without overwriting them; the two strings IronDome makes for it are zeroed in place on CPython. Decrypted entries are ordinary Python strings for as long as a command runs. Session and grant tokens are bearer secrets that live in your shell's environment by design. The recovery key is text you are shown once and may type back: as text it is an ordinary Python string, not locked memory, for as long as a command holds it. A process with debugger rights over a running IronDome can read anything.
 
 - Platforms: macOS, Linux
 - Closes L4: 3.x: the key was never zeroed in memory (immutable bytes inside a Fernet object).
@@ -197,16 +197,16 @@ Tests (28):
 - [`tests/claims/test_keys_wiped.py::test_a_key_dropped_as_bytes_without_wiping_is_still_found`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_the_probe_judged_by_irondome_verify_passes`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_a_non_ascii_master_password_leaves_no_copy_in_any_form`](../tests/claims/test_keys_wiped.py)
-- [`tests/claims/test_keys_wiped.py::test_on_macos_no_key_is_left_even_when_the_system_does_not_zero_freed_memory`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_the_derivation_probe_recorded_every_form_and_saw_its_control`](../tests/claims/test_keys_wiped.py)
-- [`tests/claims/test_keys_wiped.py::test_hkdf_leaves_no_copy_of_the_key_it_derives`](../tests/claims/test_keys_wiped.py)
-- [`tests/claims/test_keys_wiped.py::test_argon2id_leaves_no_copy_of_the_password_or_of_its_output`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_normalising_a_non_ascii_password_leaves_no_str_copy_of_it`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_with_the_secure_enclave_no_key_is_left_either`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_with_the_tpm_no_key_is_left_either`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_boundary_a_decrypted_entry_is_an_ordinary_string`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_boundary_session_and_grant_tokens_are_ordinary_strings`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_boundary_a_value_still_in_use_is_readable_in_memory`](../tests/claims/test_keys_wiped.py)
+- [`tests/claims/test_keys_wiped.py::test_boundary_on_macos_without_zero_on_free_only_the_copy_argon2id_makes_of_the_password_can_be_left`](../tests/claims/test_keys_wiped.py)
+- [`tests/claims/test_keys_wiped.py::test_boundary_right_after_a_derivation_the_only_copies_are_those_argon2id_and_hkdf_make_inside_cryptography`](../tests/claims/test_keys_wiped.py)
+- [`tests/claims/test_keys_wiped.py::test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_write_straight_into_them`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_the_probe_runs_in_a_fresh_interpreter_with_a_minimal_environment`](../tests/claims/test_keys_wiped.py)
 - [`tests/unit/test_memscan.py::test_a_freed_bytes_copy_is_found_and_a_wiped_one_is_not`](../tests/unit/test_memscan.py)
 - [`tests/unit/test_memscan.py::test_freshly_freed_small_objects_are_not_overwritten_by_the_scan`](../tests/unit/test_memscan.py)

@@ -75,9 +75,11 @@ back. In particular:
 * a copy of a vault opened without the device secret or the recovery key;
 * a session or grant that opens anything on another machine, in another
   bunker or after `nuke`;
-* the master password, the Argon2id output, the device secret, the
-  key-encryption key, the vault key or a subkey found outside locked memory,
-  or still in memory after the vault locks;
+* a copy of the master password, the Argon2id output, the device secret, the
+  key-encryption key, the vault key or a subkey that IronDome's own code made
+  outside locked memory, or left in memory after the vault locks (the copies
+  Argon2id and HKDF make inside `cryptography` are the documented boundary of
+  [`keys-wiped`](docs/CLAIMS.md#keys-wiped); a way to avoid them is welcome);
 * an edit to the audit log that `irondome audit --verify` misses, beyond the
   truncation the [`audit-log`](docs/CLAIMS.md#audit-log) claim documents;
 * a network connection made by IronDome itself;

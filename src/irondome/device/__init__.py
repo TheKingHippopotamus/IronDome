@@ -166,7 +166,7 @@ def chip_requirements() -> str:
     """
     if sys.platform == "darwin":
         return (
-            "a Mac with a Secure Enclave (every Apple-silicon Mac, Intel Macs with a T2 chip) and the Xcode "
+            "an Apple-silicon Mac, for its Secure Enclave (Intel Macs are untested), and the Xcode "
             "Command Line Tools, which compile IronDome's helper for it: xcode-select --install"
         )
     if sys.platform.startswith("linux"):

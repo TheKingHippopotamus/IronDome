@@ -1546,13 +1546,34 @@ def check_keys_wiped(box: Sandbox) -> CheckResult:
     return evaluate_keys_probe(clean, control, documents[3] if len(documents) > 3 else None, derivation)
 
 
-def _leftovers(document: Dict[str, Any]) -> List[str]:
-    return [
-        f"{len(needle['hits'])} cop{'y' if len(needle['hits']) == 1 else 'ies'} of the {needle['label']} "
-        f"({', '.join(hit['where'] for hit in needle['hits'][:2])})"
-        for needle in document["needles"]
-        if needle["kind"] == "key" and needle["hits"]
-    ]
+#: The copies the claim's boundary names, by probe label: Argon2id in pyca/cryptography (OpenSSL) copies the
+#: password it is given into system-malloc memory it frees without overwriting, and HKDF leaves a copy of the
+#: key it derives on the C stack and in memory it frees. IronDome cannot wipe either. A scan that leaves freed
+#: memory unzeroed may find the first; one made right after a derivation, both. Anything else is a failure.
+#: (The labels are _LABEL_PASSWORD, _LABEL_NORMALISED and _LABEL_HKDF, defined with the probe below.)
+_ARGON2_INPUT = ("master password", "master password as fed to Argon2id")
+_MADE_INSIDE_CRYPTOGRAPHY = _ARGON2_INPUT + ("HKDF output",)
+
+
+def _leftovers(document: Dict[str, Any], allowed: Sequence[str] = (), *, only: bool = False) -> List[str]:
+    """The key needles with hits, as text: those not in *allowed*, or with *only*, those in it.
+
+    A hit on an *allowed* Argon2id input outside system-malloc memory is not the copy the boundary names,
+    and counts as a leftover.
+    """
+    found = []
+    for needle in document["needles"]:
+        if needle["kind"] != "key" or not needle["hits"]:
+            continue
+        expected = needle["label"] in allowed and (
+            needle["label"] not in _ARGON2_INPUT or all("MALLOC_" in hit["where"] for hit in needle["hits"])
+        )
+        if expected == only:
+            found.append(
+                f"{len(needle['hits'])} cop{'y' if len(needle['hits']) == 1 else 'ies'} of the {needle['label']} "
+                f"({', '.join(hit['where'] for hit in needle['hits'][:2])})"
+            )
+    return found
 
 
 def evaluate_keys_probe(
@@ -1575,14 +1596,14 @@ def evaluate_keys_probe(
     leftovers = _leftovers(clean)
     if leftovers:
         problems.append("after the vault was locked memory still held " + "; ".join(leftovers))
-    hidden = _leftovers(unzeroed) if unzeroed is not None else []
+    hidden = _leftovers(unzeroed, _ARGON2_INPUT) if unzeroed is not None else []
     if hidden:
         problems.append(
             "with the system's zeroing of freed memory turned off (MallocZeroOnFree=0), memory still held "
             + "; ".join(hidden)
             + " after the vault was locked: freed without being overwritten"
         )
-    made = _leftovers(derivation) if derivation is not None else []
+    made = _leftovers(derivation, _MADE_INSIDE_CRYPTOGRAPHY) if derivation is not None else []
     if made:
         problems.append(
             "right after Argon2id and HKDF, outside the locked buffers that hold them, memory held "
@@ -1603,11 +1624,25 @@ def evaluate_keys_probe(
     if blind or not kept_vault_key:
         missed = ", ".join(blind) or "the vault key"
         return _failed(f"the scanner missed a deliberate copy ({missed}), so it proves nothing")
-    also = ", also with the system's zeroing of freed memory turned off" if unzeroed is not None else ""
-    source = "; none right after Argon2id and HKDF either" if derivation is not None else ""
+    also = (
+        ", and with the system's zeroing of freed memory turned off none but what Argon2id copies"
+        if unzeroed is not None
+        else ""
+    )
+    source = "; right after Argon2id and HKDF, none but what they copy" if derivation is not None else ""
+    inside = (_leftovers(unzeroed, _ARGON2_INPUT, only=True) if unzeroed is not None else []) + (
+        _leftovers(derivation, _MADE_INSIDE_CRYPTOGRAPHY, only=True) if derivation is not None else []
+    )
+    named = (
+        " (the boundary: copies made inside pyca/cryptography, which IronDome cannot wipe, found this time: "
+        + "; ".join(inside)
+        + ")"
+        if inside
+        else ""
+    )
     return _passed(
         f"{stats['bytes_scanned'] / 2**30:.1f} GiB in {stats['regions']} regions searched after the vault was locked: "
-        f"no copy of any of {len(keys_checked)} keys ({', '.join(keys_checked[:4])}, ...){also}{source}; the "
+        f"no copy of any of {len(keys_checked)} keys ({', '.join(keys_checked[:4])}, ...){also}{source}{named}; the "
         "deliberate copies kept or dropped as bytes were all found"
     )
 
