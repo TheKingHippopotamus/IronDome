@@ -180,13 +180,16 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
             lanes=params.lanes,
             memory_cost=params.memory_kib,
         )
-        kdf.derive_into(view, out.view())  # type: ignore[arg-type, unused-ignore]  # any buffer is accepted
         try:
-            again = Argon2id(salt=bytes(len(salt)), length=KEY_LEN, iterations=1, lanes=params.lanes,
-                             memory_cost=8 * params.lanes)
-            again.derive_into(bytes(len(view)), bytearray(KEY_LEN))
-        except Exception:  # noqa: S110 - the key is derived; a refused second run must not undo that
-            pass
+            kdf.derive_into(view, out.view())  # type: ignore[arg-type, unused-ignore]  # any buffer is accepted
+        finally:
+            # Also when the derivation failed (too little memory for its cost): the copy was made before that.
+            try:
+                again = Argon2id(salt=bytes(len(salt)), length=KEY_LEN, iterations=1, lanes=params.lanes,
+                                 memory_cost=8 * params.lanes)
+                again.derive_into(bytes(len(view)), bytearray(KEY_LEN))
+            except Exception:  # noqa: S110 - a refused second run must not change what the first one did
+                pass
     except BaseException:
         out.wipe()
         raise

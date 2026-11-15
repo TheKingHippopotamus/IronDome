@@ -822,3 +822,33 @@ def test_random_bytes(length):
     assert isinstance(first, bytes) and len(first) == len(second) == length
     if length >= 12:
         assert first != second
+
+
+def test_argon2id_is_run_again_on_zeros_even_when_the_derivation_fails(monkeypatch):
+    """The library copies the password before it can fail (too little memory for the cost): the second run,
+    which gets that copy overwritten, follows a failed derivation too, and its own failure changes nothing."""
+    from irondome import crypto
+    from irondome.secmem import SecureBuffer
+
+    made = []
+
+    class Fake:
+        def __init__(self, **settings):
+            self.settings = settings
+            made.append(self)
+
+        def derive_into(self, material, buffer):
+            self.material = bytes(material)
+            if len(made) == 1:
+                raise MemoryError("not enough memory for this cost")
+            raise RuntimeError("the second run fails as well")
+
+    monkeypatch.setattr(crypto, "Argon2id", Fake)
+    salt = bytes(range(16))
+    with SecureBuffer.from_buffer(b"a test password") as password:
+        with pytest.raises(MemoryError):
+            crypto.argon2id(password, salt, crypto.Argon2Params(memory_kib=19 * 1024))
+    first, second = made
+    assert first.material == b"a test password" and first.settings["salt"] == salt
+    assert second.material == bytes(len(b"a test password")) and second.settings["salt"] == bytes(16)
+    assert second.settings["iterations"] == 1 and second.settings["memory_cost"] == 8 * second.settings["lanes"]
