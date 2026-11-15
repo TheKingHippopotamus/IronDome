@@ -110,7 +110,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from irondome import paths
 from irondome.errors import AuthError, IronDomeError, UsageError, VaultError
-from irondome.secmem import BufferLike, SecureBuffer, as_view, wipe_bytes
+from irondome.secmem import BufferLike, SecureBuffer, _wipe_str, as_view, wipe_bytes
 from irondome.vault import Entry, Secret, Vault, validate_name, without_control
 
 __all__ = [
@@ -723,7 +723,7 @@ def _entries_from(plain: bytearray) -> List[LegacyEntry]:
     finally:
         wipe_bytes(plain)
         if text is not None:
-            wipe_bytes(text)
+            _wipe_str(text)  # the decoded copy: made here, and json.loads keeps no part of it
     # Raised here, outside the handler, so that no exception carrying the
     # plaintext (JSONDecodeError.doc, UnicodeDecodeError.object) is chained.
     if not readable or not isinstance(document, list):
