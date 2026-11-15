@@ -917,8 +917,10 @@ def test_on_the_tpm_removing_one_bunker_never_destroys_an_index_another_bunker_u
 
 @pytest.mark.tpm
 def test_real_tpm_removing_one_bunker_never_destroys_an_index_another_bunker_uses(chip):
+    before = nv_handles()  # the suite shares one TPM: whatever earlier tests left in it is not alpha's
     alpha = build("alpha")
-    alphas = nv_handles()
+    alphas = nv_handles() - before
+    assert len(alphas) == 2
     build("bravo", BRAVO_PASSWORD)
     name_alphas_index("vault file copied")
 
