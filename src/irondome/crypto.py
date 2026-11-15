@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from irondome.errors import IronDomeError, VaultError
-from irondome.secmem import BufferLike, SecureBuffer, as_view, heap_copies, scrub_heap_copies, wipe_bytes
+from irondome.secmem import BufferLike, SecureBuffer, as_view, wipe_bytes
 
 __all__ = [
     "KEY_LEN",
@@ -156,10 +156,21 @@ def default_argon2() -> Argon2Params:
 
 
 def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureBuffer:
-    """Stretch *password* into a 32-byte key, written straight into locked memory."""
+    """Stretch *password* into a 32-byte key, written straight into locked memory.
+
+    pyca/cryptography copies the password it is given into memory it frees
+    without overwriting. IronDome cannot reach that copy safely, so it has the
+    library overwrite it: Argon2id is run once more from this same frame, at
+    the lowest cost there is, with an all-zero password and salt of the same
+    lengths. The second run asks the allocator for blocks of the same sizes
+    in the same order and is handed the ones just freed. That is the
+    allocator's choice, not a guarantee: see the boundary of the keys-wiped
+    claim for where it is checked.
+    """
     params.validate()
     if len(salt) < SALT_LEN:
         raise VaultError("Argon2id salt is too short")
+    view = as_view(password)
     out = SecureBuffer(KEY_LEN)
     try:
         kdf = Argon2id(
@@ -169,14 +180,13 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
             lanes=params.lanes,
             memory_cost=params.memory_kib,
         )
-        # pyca/cryptography copies the password into memory it frees without overwriting. On Linux nothing
-        # zeroes that block: where the password's bytes are in the heap is noted before the derivation, and
-        # what holds them afterwards and did not before is zeroed (best effort; see secmem.scrub_heap_copies).
-        before = heap_copies(password)
+        kdf.derive_into(view, out.view())  # type: ignore[arg-type, unused-ignore]  # any buffer is accepted
         try:
-            kdf.derive_into(as_view(password), out.view())  # type: ignore[arg-type, unused-ignore]  # any buffer
-        finally:
-            scrub_heap_copies(password, before)
+            again = Argon2id(salt=bytes(len(salt)), length=KEY_LEN, iterations=1, lanes=params.lanes,
+                             memory_cost=8 * params.lanes)
+            again.derive_into(bytes(len(view)), bytearray(KEY_LEN))
+        except Exception:  # noqa: S110 - the key is derived; a refused second run must not undo that
+            pass
     except BaseException:
         out.wipe()
         raise

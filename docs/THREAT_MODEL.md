@@ -72,7 +72,7 @@ two parts.
 holds key material only in memory outside the Python heap, locked into RAM
 where the system allows it, and wipes it when the command
 finishes (the copy `cryptography` makes of the master password inside Argon2id
-is cleaned up afterwards, best effort: see the limits below). IronDome
+is overwritten afterwards, best effort: see the limits below). IronDome
 turns off core dumps for itself, and on Linux marks itself non-dumpable so
 other processes of the same user cannot attach to it or read its memory
 (claim [`process-hardened`](CLAIMS.md#process-hardened); `IRONDOME_DEBUG=1`
@@ -178,12 +178,12 @@ with the old key and shows what it held then.
   memory.
 * **Copies made inside `cryptography`.** Argon2id copies the master password
   it is given into memory it frees without overwriting. IronDome cannot
-  prevent that copy, only clean up after it: on Linux it notes where the
-  password's bytes already are in the process heap, searches again right after
-  the derivation and zeroes only what is new, and on macOS the system zeroes
-  small freed blocks by default. Neither is certain (the
-  boundary lists where it fails), and a copy that is left lasts until that
-  memory is reused. HKDF leaves its working keys, the one it extracts
+  prevent that copy and does not write to the library's memory itself: it
+  runs Argon2id a second time on zeros, and the library, asking for blocks of
+  the same sizes, is handed the ones it just freed and overwrites the copy.
+  That is the allocator's choice, not a guarantee (the tests find no copy
+  left on Linux with glibc, and macOS zeroes small freed blocks by default),
+  and a copy that is left lasts until that memory is reused. HKDF leaves its working keys, the one it extracts
   and the one it derives, on the C stack and in freed memory; IronDome
   overwrites them by deriving again from zeros, which holds as long as the library takes
   the same path through its code both times (the tests check that it does).

@@ -1,15 +1,15 @@
 """The master password's bytes can be in memory for good reasons, and IronDome must leave those alone.
 
-After Argon2id, on Linux, IronDome zeroes the copy pyca/cryptography leaves of the password in the heap. A
-first version zeroed every place in the heap that held those bytes, and a review before release showed what
-that did, through the real command line:
+pyca/cryptography leaves a copy of the password it is given to Argon2id in the heap. Before release IronDome
+searched the heap for that copy and zeroed it, and a review showed what that did, through the real command line:
 
-* a master password that is also a word OpenSSL keeps in the heap (``provider``) zeroed that word, every
+* a master password that is also a word OpenSSL keeps in the heap (``provider``) had that word zeroed, every
   later algorithm lookup failed, and a vault whose password had been changed to it no longer opened;
 * an entry being imported that contained the master password was stored with zero bytes in its place, and
   nothing said so.
 
-These run everywhere; only on Linux can they fail.
+IronDome no longer writes to memory it does not own: it has the library overwrite its own leftover by
+deriving again from zeros (``crypto.argon2id``). These tests stay, so that nothing brings the search back.
 """
 
 from __future__ import annotations

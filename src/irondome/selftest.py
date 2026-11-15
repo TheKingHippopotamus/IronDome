@@ -1760,6 +1760,7 @@ _LABEL_PASSWORD = "master password"  # noqa: S105 - a label, not a credential
 _LABEL_NORMALISED = "master password as fed to Argon2id"
 _LABEL_ARGON2 = "Argon2id output"
 _LABEL_HKDF = "HKDF output"
+_LABEL_HKDF_EXTRACTED = "key HKDF extracts"
 _KDF_INFO = b"irondome/v4/probe/kdf\x00"
 _LABEL_DEVICE = "device secret"
 _LABEL_VAULT_KEY = "vault key"
@@ -2286,6 +2287,13 @@ def _probe_kdf(table: memscan.NeedleTable, live: List[Any], skip: List[List[int]
             table.add(stretched, _LABEL_ARGON2)
             with crypto.hkdf(stretched, _KDF_INFO, salt) as derived:
                 table.add(derived, _LABEL_HKDF)
+            # What HKDF extracts from its input before it expands it (RFC 5869: HMAC of the input under the
+            # salt). Made here only to be looked for; made a second time from zeros, as crypto.hkdf does, so
+            # that what computing it left behind is not what the scan finds.
+            extracted = hmac.digest(salt, stretched.view(), "sha256")
+            table.add(extracted, _LABEL_HKDF_EXTRACTED)
+            wipe_bytes(extracted)
+            wipe_bytes(hmac.digest(salt, bytes(len(stretched)), "sha256"))
     live[0] = password
     live[1] = keys.normalise_password(password)
     live[2] = crypto.argon2id(live[1], salt, params)

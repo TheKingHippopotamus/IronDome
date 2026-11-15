@@ -51,10 +51,10 @@ Each is now a claim in `docs/CLAIMS.md` with the tests that hold it, and
   the process on macOS and Linux after a full session and requires zero hits.
   One copy is made outside IronDome's reach: Argon2id in `cryptography`
   (OpenSSL) copies the master password into memory it frees without
-  overwriting. On Linux IronDome notes where the password's bytes already are
-  in the heap, searches again right after the derivation and zeroes only what
-  is new; macOS zeroes small freed blocks itself. Neither is certain, and the
-  claim's boundary says where it fails. HKDF leaves its working keys, the one
+  overwriting. IronDome runs Argon2id a second time on zeros, so that the
+  library, handed the blocks it just freed, overwrites the copy itself; macOS
+  also zeroes small freed blocks. That is the allocator's choice, not a
+  guarantee, and the claim's boundary says so. HKDF leaves its working keys, the one
   it extracts and the one it derives, on the C stack and in freed memory:
   IronDome derives again from zeros to overwrite them, and a scan made right
   after a derivation finds none.
@@ -189,7 +189,7 @@ The new architecture removes all of them:
 
 No independent audit. Decrypted entries are ordinary Python strings while a
 command runs. Argon2id inside `cryptography` leaves a copy of the master
-password that IronDome can only clean up afterwards, best effort. Intel Macs are untested, and installing
+password, which IronDome gets overwritten by deriving again from zeros, best effort. Intel Macs are untested, and installing
 there builds `cryptography` from source. A recovery key, and a portable backup made with
 `irondome export`, outlive `nuke`. Whole-file rollback is not detected. A
 grant's use count and a revoke rest on deleting its file, so a copy of the

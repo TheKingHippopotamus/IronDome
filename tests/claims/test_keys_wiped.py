@@ -4,9 +4,10 @@ Statement: IronDome keeps its copies of the master password, the Argon2id
 output, the device secret, the key-encryption key, the vault key and every
 subkey only in memory outside the Python heap, locked into RAM where the system
 allows it, and overwrites them when the vault is locked; Argon2id and HKDF write their output straight into those
-buffers, and every HKDF derivation is run a second time with an all-zero key,
-which overwrites what the library leaves behind of the keys it worked with.
-After a full session, a scan of the process's entire address space finds no copy of
+buffers, and each derivation is run a second time on zeros (HKDF with an
+all-zero key, Argon2id at its lowest cost with an all-zero password of the
+same length), so that what the library leaves behind of the first run is
+overwritten by the second. After a full session, a scan of the process's entire address space finds no copy of
 any of them.
 
 Boundary tested here: the copy pyca/cryptography (OpenSSL) makes of the master
@@ -238,6 +239,7 @@ def leftovers_of(document: Dict[str, Any], *names: str) -> List[str]:
 def test_the_derivation_probe_recorded_every_form_and_saw_its_control(derivation):
     found = set(labels(derivation))
     assert {"master password", "master password as fed to Argon2id", "Argon2id output", "HKDF output"} <= found
+    assert "key HKDF extracts" in found
     assert "master password as stored in a str" in found
     dropped = [needle for needle in derivation["needles"] if needle["kind"] == "control-dropped"]
     assert len(dropped) == 1 and dropped[0]["hits"]
@@ -256,15 +258,17 @@ def test_boundary_right_after_a_derivation_the_only_copy_is_the_one_argon2id_mak
 
 
 def test_the_copy_hkdf_leaves_of_a_derived_key_is_overwritten_by_deriving_again_from_zeros(derivation):
-    """HKDF inside pyca/cryptography leaves the key it derived on the C stack and in memory it frees.
+    """HKDF inside pyca/cryptography leaves its working keys on the C stack and in memory it frees.
 
-    IronDome runs every derivation a second time, from the same frame, with
-    an all-zero key: the second run puts its working values where the first
-    put them. The scan made right after a derivation, with freed memory
-    unzeroed, finds the derived key nowhere outside its locked buffer.
+    Two of them: the intermediate key it extracts from its input, from which
+    every key under the same input and salt can be made again, and the key it
+    derives. IronDome runs every derivation a second time, from the same
+    frame, with an all-zero key: the second run puts its working values where
+    the first put them. The scan made right after a derivation, with freed
+    memory unzeroed, finds neither anywhere outside the locked buffer.
     """
-    (derived,) = [needle for needle in key_needles(derivation) if needle["label"] == "HKDF output"]
-    assert derived["hits"] == []
+    working = {needle["label"]: needle["hits"] for needle in key_needles(derivation)}
+    assert working["HKDF output"] == [] and working["key HKDF extracts"] == []
 
 
 def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_write_straight_into_them(monkeypatch):
@@ -272,8 +276,9 @@ def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_writ
 
     ``derive_into``, never ``derive``: no immutable ``bytes`` of a key is ever
     handed back. What the library copies on the way is the boundary above.
-    After each HKDF call comes its repeat: the same derivation from an
-    all-zero key of the same length, written into a buffer that is thrown away.
+    After each call comes its repeat on zeros, written into a buffer that is
+    thrown away: Argon2id with an all-zero password and salt of the same
+    lengths, HKDF with an all-zero key of the same length.
     """
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -306,10 +311,13 @@ def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_writ
     with SecureBuffer.from_buffer(b"a test password") as password:
         with crypto.argon2id(password, salt, crypto.Argon2Params(memory_kib=19 * 1024)) as stretched:
             with crypto.hkdf(stretched, b"irondome/test", salt) as derived:
-                assert [name for name, _, _ in calls] == ["Argon2id", "HKDF", "HKDF"]
+                assert [name for name, _, _ in calls] == ["Argon2id", "Argon2id", "HKDF", "HKDF"]
                 _, zeros, scratch = calls.pop()
                 assert bytes(zeros) == bytes(len(stretched.view())) and len(scratch) == len(derived.view())
                 assert bytes(scratch) != bytes(derived.view())
+                _, zeros, scratch = calls.pop(1)
+                assert bytes(zeros) == bytes(len(password.view())) and len(scratch) == len(stretched.view())
+                assert bytes(scratch) != bytes(stretched.view())
                 for (_, material, buffer), source, out in zip(calls, (password, stretched), (stretched, derived)):
                     assert type(material) is memoryview and type(buffer) is memoryview and not buffer.readonly
                     assert bytes(material) == bytes(source.view()) and bytes(buffer) == bytes(out.view())
