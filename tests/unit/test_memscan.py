@@ -141,7 +141,8 @@ def test_the_table_never_matches_itself(scanner):
 def test_a_partial_copy_is_not_a_hit(scanner):
     with random_key() as key:
         plant = bytearray(2 * PAGE)
-        plant[64:95] = key.view()[:31]  # all but the last byte
+        plant[64:95] = key.view()[:31]  # all but the last byte...
+        plant[95] = key.view()[31] ^ 0x80  # ...which a zero-filled buffer would supply one time in 256
         plant[200:232] = bytes(key.view()[:31]) + bytes([key.view()[31] ^ 1])
         table = memscan.NeedleTable(capacity=1, size=64)
         table.add(key)
