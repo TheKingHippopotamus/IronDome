@@ -176,7 +176,7 @@ narrow, short-lived grants, and rotate what they used.
 | Device binding | Secure Enclave (macOS) · TPM 2.0 NV storage (Linux) · file-based fallback, labelled as such |
 | Touch ID | Enforced by the Secure Enclave on the key operation, not by a prompt in front of a readable key |
 | Wrong guesses | On a TPM, checked and rate-limited by the chip |
-| Memory | IronDome keeps keys in locked pages outside the Python heap and wipes them; a test scans process memory to prove it. Argon2id and HKDF inside the `cryptography` library leave copies IronDome cannot wipe (see the claim's boundary) |
+| Memory | IronDome keeps keys in locked pages outside the Python heap and wipes them; a test scans process memory to prove it. Argon2id inside the `cryptography` library leaves a copy of the master password IronDome cannot wipe (see the claim's boundary) |
 | Self-destruct | `irondome nuke` destroys the device secrets first: a restored copy of the vault no longer opens with the master password (a recovery key you kept still opens it) |
 | Network | None: no module imports a networking library, and every command works with socket creation disabled |
 | Dependencies | One: [`cryptography`](https://cryptography.io) |
@@ -203,7 +203,8 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   is open, or from a compromised operating system.
 * **Decrypted entries are ordinary strings** for as long as a command runs.
   Only IronDome's own copies of key material stay in locked, wiped memory:
-  Argon2id and HKDF inside `cryptography` leave copies it cannot wipe.
+  Argon2id inside `cryptography` leaves a copy of the master password it
+  cannot wipe.
 * **Masking stops accidents, not intent.** A command that transforms a secret
   on purpose gets it through, and a `--reveal` grant or an entry marked
   `--agent reveal` lets an agent see the value.

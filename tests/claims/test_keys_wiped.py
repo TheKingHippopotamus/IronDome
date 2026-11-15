@@ -4,12 +4,14 @@ Statement: IronDome keeps its copies of the master password, the Argon2id
 output, the device secret, the key-encryption key, the vault key and every
 subkey only in locked memory outside the Python heap, and overwrites them when
 the vault is locked; Argon2id and HKDF write their output straight into those
-buffers. After a full session, a scan of the process's entire address space
-finds no copy of any of them.
+buffers, and every HKDF derivation is run a second time with an all-zero key,
+which overwrites the copy the library leaves of the key it derived. After a
+full session, a scan of the process's entire address space finds no copy of
+any of them.
 
-Boundary tested here: the copies pyca/cryptography (OpenSSL) makes inside
-Argon2id and HKDF, which IronDome cannot wipe, are the only ones a scan with
-freed memory unzeroed, or one made right after a derivation, may find.
+Boundary tested here: the copy pyca/cryptography (OpenSSL) makes of the master
+password inside Argon2id, which IronDome cannot wipe, is the only one a scan
+with freed memory unzeroed, or one made right after a derivation, may find.
 
 How it is proved: a fresh interpreter (``irondome.selftest.probe_main``)
 wraps ``irondome.crypto.argon2id`` and ``hkdf``, the device backend's
@@ -177,11 +179,11 @@ def test_a_non_ascii_master_password_leaves_no_copy_in_any_form(probes):
     assert leftovers(document) == []
 
 
-#: The copies the boundary names, as the probe labels them. Argon2id in pyca/cryptography (OpenSSL) copies the
-#: password it is given into system-malloc memory and frees it without overwriting it; HKDF leaves a copy of
-#: the key it derives on the C stack and in memory it frees. For an ASCII password both labels are the same bytes.
+#: The copy the boundary names, as the probe labels it. Argon2id in pyca/cryptography (OpenSSL) copies the
+#: password it is given into system-malloc memory and frees it without overwriting it. For an ASCII password
+#: both labels are the same bytes. (HKDF leaves a copy of the key it derives too, on the C stack and in memory
+#: it frees: IronDome derives again from zeros, which overwrites it, so that copy is not on this list.)
 ARGON2_INPUT = ("master password", "master password as fed to Argon2id")
-MADE_INSIDE_CRYPTOGRAPHY = ARGON2_INPUT + ("HKDF output",)
 
 
 def found_labels(document: Dict[str, Any]) -> List[str]:
@@ -241,19 +243,28 @@ def test_the_derivation_probe_recorded_every_form_and_saw_its_control(derivation
     assert len(dropped) == 1 and dropped[0]["hits"]
 
 
-def test_boundary_right_after_a_derivation_the_only_copies_are_those_argon2id_and_hkdf_make_inside_cryptography(
-    derivation,
-):
-    """Searched at once, with freed memory unzeroed: what Argon2id and HKDF copy inside pyca/cryptography is there.
+def test_boundary_right_after_a_derivation_the_only_copy_is_the_one_argon2id_makes_of_the_password(derivation):
+    """Searched at once, with freed memory unzeroed: what Argon2id copies inside pyca/cryptography is there.
 
-    Argon2id's copy of the password it was fed, in system-malloc memory, and
-    HKDF's copy of its output, on the C stack and in freed memory. No copy of
-    the Argon2id output, of the password as typed, or of any form IronDome
-    itself makes. Which of the named copies a run finds is up to the
-    allocator and the stack, so this asserts only what may be found, and where.
+    Argon2id's copy of the password it was fed, in system-malloc memory. No
+    copy of the Argon2id output, of the HKDF output, of the password as typed,
+    or of any form IronDome itself makes. Whether a run finds the named copy
+    is up to the allocator, so this asserts only what may be found, and where.
     """
-    assert [label for label in found_labels(derivation) if label not in MADE_INSIDE_CRYPTOGRAPHY] == []
+    assert [label for label in found_labels(derivation) if label not in ARGON2_INPUT] == []
     assert_argon2_input_copies_are_in_system_malloc(derivation)
+
+
+def test_the_copy_hkdf_leaves_of_a_derived_key_is_overwritten_by_deriving_again_from_zeros(derivation):
+    """HKDF inside pyca/cryptography leaves the key it derived on the C stack and in memory it frees.
+
+    IronDome runs every derivation a second time, from the same frame, with
+    an all-zero key: the second run puts its working values where the first
+    put them. The scan made right after a derivation, with freed memory
+    unzeroed, finds the derived key nowhere outside its locked buffer.
+    """
+    (derived,) = [needle for needle in key_needles(derivation) if needle["label"] == "HKDF output"]
+    assert derived["hits"] == []
 
 
 def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_write_straight_into_them(monkeypatch):
@@ -261,6 +272,8 @@ def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_writ
 
     ``derive_into``, never ``derive``: no immutable ``bytes`` of a key is ever
     handed back. What the library copies on the way is the boundary above.
+    After each HKDF call comes its repeat: the same derivation from an
+    all-zero key of the same length, written into a buffer that is thrown away.
     """
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.hkdf import HKDF
@@ -293,7 +306,10 @@ def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_writ
     with SecureBuffer.from_buffer(b"a test password") as password:
         with crypto.argon2id(password, salt, crypto.Argon2Params(memory_kib=19 * 1024)) as stretched:
             with crypto.hkdf(stretched, b"irondome/test", salt) as derived:
-                assert [name for name, _, _ in calls] == ["Argon2id", "HKDF"]
+                assert [name for name, _, _ in calls] == ["Argon2id", "HKDF", "HKDF"]
+                _, zeros, scratch = calls.pop()
+                assert bytes(zeros) == bytes(len(stretched.view())) and len(scratch) == len(derived.view())
+                assert bytes(scratch) != bytes(derived.view())
                 for (_, material, buffer), source, out in zip(calls, (password, stretched), (stretched, derived)):
                     assert type(material) is memoryview and type(buffer) is memoryview and not buffer.readonly
                     assert bytes(material) == bytes(source.view()) and bytes(buffer) == bytes(out.view())

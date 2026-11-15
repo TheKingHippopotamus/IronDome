@@ -1547,13 +1547,12 @@ def check_keys_wiped(box: Sandbox) -> CheckResult:
     return evaluate_keys_probe(clean, control, documents[3] if len(documents) > 3 else None, derivation)
 
 
-#: The copies the claim's boundary names, by probe label: Argon2id in pyca/cryptography (OpenSSL) copies the
-#: password it is given into system-malloc memory it frees without overwriting, and HKDF leaves a copy of the
-#: key it derives on the C stack and in memory it frees. IronDome cannot wipe either. A scan that leaves freed
-#: memory unzeroed may find the first; one made right after a derivation, both. Anything else is a failure.
-#: (The labels are _LABEL_PASSWORD, _LABEL_NORMALISED and _LABEL_HKDF, defined with the probe below.)
+#: The copy the claim's boundary names, by probe label: Argon2id in pyca/cryptography (OpenSSL) copies the
+#: password it is given into system-malloc memory it frees without overwriting, and IronDome cannot wipe it.
+#: A scan that leaves freed memory unzeroed, or one made right after a derivation, may find it. Anything else
+#: is a failure: HKDF's copy of the key it derives is overwritten by irondome.crypto.hkdf, which derives again
+#: from zeros. (The labels are _LABEL_PASSWORD and _LABEL_NORMALISED, defined with the probe below.)
 _ARGON2_INPUT = ("master password", "master password as fed to Argon2id")
-_MADE_INSIDE_CRYPTOGRAPHY = _ARGON2_INPUT + ("HKDF output",)
 
 
 def _leftovers(document: Dict[str, Any], allowed: Sequence[str] = (), *, only: bool = False) -> List[str]:
@@ -1604,7 +1603,7 @@ def evaluate_keys_probe(
             + "; ".join(hidden)
             + " after the vault was locked: freed without being overwritten"
         )
-    made = _leftovers(derivation, _MADE_INSIDE_CRYPTOGRAPHY) if derivation is not None else []
+    made = _leftovers(derivation, _ARGON2_INPUT) if derivation is not None else []
     if made:
         problems.append(
             "right after Argon2id and HKDF, outside the locked buffers that hold them, memory held "
@@ -1630,9 +1629,9 @@ def evaluate_keys_probe(
         if unzeroed is not None
         else ""
     )
-    source = "; right after Argon2id and HKDF, none but what they copy" if derivation is not None else ""
+    source = "; right after Argon2id and HKDF, none but what Argon2id copies" if derivation is not None else ""
     inside = (_leftovers(unzeroed, _ARGON2_INPUT, only=True) if unzeroed is not None else []) + (
-        _leftovers(derivation, _MADE_INSIDE_CRYPTOGRAPHY, only=True) if derivation is not None else []
+        _leftovers(derivation, _ARGON2_INPUT, only=True) if derivation is not None else []
     )
     named = (
         " (the boundary: copies made inside pyca/cryptography, which IronDome cannot wipe, found this time: "

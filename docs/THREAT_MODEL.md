@@ -67,8 +67,8 @@ two parts.
 
 **While a command is running:** IronDome keeps the window small. IronDome
 holds key material only in locked memory and wipes it when the command
-finishes (the copies `cryptography` makes inside Argon2id and HKDF are out of
-its reach: see the limits below). IronDome
+finishes (the copy `cryptography` makes of the master password inside Argon2id
+is out of its reach: see the limits below). IronDome
 turns off core dumps for itself, and on Linux marks itself non-dumpable so
 other processes of the same user cannot attach to it or read its memory
 (claim [`process-hardened`](CLAIMS.md#process-hardened); `IRONDOME_DEBUG=1`
@@ -173,9 +173,12 @@ with the old key and shows what it held then.
   runs. Only IronDome's own copies of *key material* stay in locked, wiped
   memory.
 * **Copies made inside `cryptography`.** Argon2id copies the master password
-  it is given into memory it frees without overwriting, and HKDF leaves a copy
-  of each key it derives on the C stack and in freed memory. They last until
-  that memory is reused, and IronDome cannot wipe them. A non-ASCII master
+  it is given into memory it frees without overwriting. The copy lasts until
+  that memory is reused, and IronDome cannot wipe it. HKDF leaves a copy of
+  each key it derives on the C stack and in freed memory; IronDome overwrites
+  it by deriving again from zeros, which holds as long as the library takes
+  the same path through its code both times (the tests check that it does).
+  A non-ASCII master
   password also leaves Python's `unicodedata` working copies in freed memory.
   See the boundary of [`keys-wiped`](CLAIMS.md#keys-wiped).
 * **Intel Macs are untested.** `cryptography` publishes no macOS wheel for

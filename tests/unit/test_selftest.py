@@ -282,20 +282,24 @@ def test_on_macos_the_memory_verdict_does_not_rest_on_the_system_zeroing_freed_m
 
 
 def test_the_memory_verdict_names_every_leftover_including_those_the_derivation_leaves():
-    """The kdf run is searched right after Argon2id and HKDF: their own copies are the boundary, named in the
-    verdict; any other key found there, or anything left after the vault was locked, is a failure."""
+    """The kdf run is searched right after Argon2id and HKDF: Argon2id's copy of the password is the boundary,
+    named in the verdict; any other key found there, the HKDF output included, or anything left after the vault
+    was locked, is a failure."""
     clean, control = probe_document()
-    derivation = dict(clean, needles=[found("HKDF output", "0x40 anonymous rw-")])
+    derivation = dict(clean, needles=[found("master password as fed to Argon2id", "0x40 MALLOC_TINY rw-")])
     verdict = selftest.evaluate_keys_probe(clean, control, None, derivation)
-    assert verdict.status == selftest.PASS and "the boundary" in verdict.detail and "HKDF output" in verdict.detail
-    other = dict(clean, needles=[found("vault key", "0x40 anonymous rw-")])
-    verdict = selftest.evaluate_keys_probe(clean, control, None, other)
-    assert verdict.status == selftest.FAIL and "right after Argon2id and HKDF" in verdict.detail
+    assert verdict.status == selftest.PASS and "the boundary" in verdict.detail
+    assert "master password as fed to Argon2id" in verdict.detail
+    for label in ("vault key", "HKDF output"):
+        other = dict(clean, needles=[found(label, "0x40 anonymous rw-")])
+        verdict = selftest.evaluate_keys_probe(clean, control, None, other)
+        assert verdict.status == selftest.FAIL and label in verdict.detail
+        assert "right after Argon2id and HKDF" in verdict.detail
     leaked = dict(clean, needles=[dict(clean["needles"][0], hits=[{"address": 8, "where": "0x8 [heap] rw-p"}]),
                                   clean["needles"][1]])
     both = selftest.evaluate_keys_probe(leaked, control, None, derivation)
     assert both.status == selftest.FAIL and "after the vault was locked" in both.detail
-    assert "right after Argon2id and HKDF, none but what they copy" in (
+    assert "right after Argon2id and HKDF, none but what Argon2id copies" in (
         selftest.evaluate_keys_probe(clean, control, None, clean).detail
     )
 

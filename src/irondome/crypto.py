@@ -182,14 +182,24 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
 
 
 def hkdf(ikm: BufferLike, info: bytes, salt: Optional[bytes] = None, length: int = KEY_LEN) -> SecureBuffer:
-    """Derive a purpose-bound key. *info* is the purpose label and is mandatory."""
+    """Derive a purpose-bound key. *info* is the purpose label and is mandatory.
+
+    pyca/cryptography leaves a copy of the derived key behind: in its own
+    frames on the C stack and in memory it frees without overwriting. So the
+    derivation is run a second time from this same frame, with an all-zero
+    key of the same length and the same label, salt and output length. The
+    second run takes the same path through the same code, puts its working
+    values where the first run put them, and what is left afterwards is a
+    key derived from zeros.
+    """
     if not info:
         raise ValueError("HKDF needs a purpose label")
+    view = as_view(ikm)
     out = SecureBuffer(length)
     try:
-        HKDF(algorithm=hashes.SHA256(), length=length, salt=salt, info=info).derive_into(
-            as_view(ikm), out.view()
-        )
+        HKDF(algorithm=hashes.SHA256(), length=length, salt=salt, info=info).derive_into(view, out.view())
+        zeros, scratch = bytes(len(view)), bytearray(length)
+        HKDF(algorithm=hashes.SHA256(), length=length, salt=salt, info=info).derive_into(zeros, scratch)
     except BaseException:
         out.wipe()
         raise
