@@ -96,8 +96,11 @@ _TERMINATE_GRACE = 3.0
 #: to be holding them.
 _DRAIN_GRACE = 1.0
 _DRAIN_BYTES = 8 * 1024 * 1024
-#: The longest single wait asked of the operating system; longer limits wait in slices.
-_WAIT_SLICE = 86_400.0
+#: The longest single wait for the command. It is never one unbounded wait: a signal that arrives in the
+#: instant between Python's last check for signals and the start of a blocking wait is noted but interrupts
+#: nothing, and would sit unhandled until the command ended by itself. A wait with a time limit comes back
+#: to Python at least every 50 ms (subprocess polls), where the signal is then acted on.
+_WAIT_SLICE = 1.0
 _STDOUT = 1
 _STDERR = 2
 #: Windows cannot wait on a pipe; there the reader threads block instead.
@@ -710,6 +713,14 @@ def _feed(sink: IO[bytes], data: bytes, wake: int) -> None:
             pass
 
 
+def _block_ending_signals() -> Optional[Any]:
+    """Block SIGINT, SIGTERM, SIGHUP and SIGQUIT in this thread; return the mask to put back, or None."""
+    if not hasattr(signal, "pthread_sigmask"):
+        return None  # Windows: no thread signal masks, and no signals delivered to threads this way
+    ending = {getattr(signal, name) for name in ("SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT") if hasattr(signal, name)}
+    return signal.pthread_sigmask(signal.SIG_BLOCK, ending)
+
+
 def _pipe(stream: Optional[IO[bytes]]) -> IO[bytes]:
     if stream is None:
         raise IronDomeError("the command was started without the pipe IronDome asked for")
@@ -728,15 +739,27 @@ class _Plumbing:
     def start(
         self, process: "subprocess.Popen[bytes]", sinks: Optional[Tuple[_Sink, _Sink]], feed: Optional[bytes]
     ) -> None:
-        if sinks is not None:
-            for stream, sink in zip((process.stdout, process.stderr), sinks):
-                pump = _Pump(_pipe(stream), sink, self._wake_read)
-                pump.start()
-                self._pumps.append(pump)
-        if feed is not None:
-            feeder = threading.Thread(target=_feed, args=(_pipe(process.stdin), feed, self._wake_read), daemon=True)
-            feeder.start()
-            self._feeder = feeder
+        # A thread starts with the signal mask of the thread that starts it. These threads start with the
+        # signals that end a program blocked, so the system can only hand such a signal to the main thread,
+        # which is waiting for the command: the wait is interrupted and the signal is acted on at once. Handed
+        # to one of these threads instead, it would be noted and then sit there until the command ended by
+        # itself. A signal that arrives in between stays pending and is delivered when the mask is put back.
+        blocked = _block_ending_signals()
+        try:
+            if sinks is not None:
+                for stream, sink in zip((process.stdout, process.stderr), sinks):
+                    pump = _Pump(_pipe(stream), sink, self._wake_read)
+                    pump.start()
+                    self._pumps.append(pump)
+            if feed is not None:
+                feeder = threading.Thread(
+                    target=_feed, args=(_pipe(process.stdin), feed, self._wake_read), daemon=True
+                )
+                feeder.start()
+                self._feeder = feeder
+        finally:
+            if blocked is not None:
+                signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
 
     def finish(self) -> None:
         """The command has exited: let every thread drain what is left and stop."""
@@ -847,8 +870,6 @@ def _wait(
     Raises ``subprocess.TimeoutExpired`` after *limit* seconds, and
     :class:`CommandCancelledError` as soon as *cancelled* returns true.
     """
-    if limit is None and cancelled is None:
-        return process.wait()
     deadline = None if limit is None else time.monotonic() + limit
     slice_ = _WAIT_SLICE if cancelled is None else _CANCEL_POLL
     while True:

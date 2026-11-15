@@ -1261,6 +1261,43 @@ def test_the_fallback_for_pipes_that_cannot_be_selected(monkeypatch: pytest.Monk
     assert run_captured(shout, {}, stdin=b"piped in", timeout=PATIENCE).stdout == "PIPED IN\n"
 
 
+def test_the_wait_for_the_command_is_never_one_unbounded_wait():
+    """A signal that arrives just as a blocking wait starts is noted but interrupts nothing. With no limit on
+    its wait the runner would then sit on SIGTERM until the command ended by itself; it waits in bounded
+    slices, and Python acts on the signal between them."""
+
+    class Slow:
+        def __init__(self) -> None:
+            self.limits: List[Optional[float]] = []
+
+        def wait(self, timeout: Optional[float] = None) -> int:
+            self.limits.append(timeout)
+            if len(self.limits) < 3:
+                raise subprocess.TimeoutExpired("command", timeout or 0)
+            return 7
+
+    process = Slow()
+    assert runner._wait(process, None) == 7  # type: ignore[arg-type]
+    assert len(process.limits) == 3 and all(limit is not None and 0 < limit <= 1.0 for limit in process.limits)
+
+
+@posix_only
+def test_the_threads_that_carry_the_streams_cannot_be_handed_a_signal_that_ends_the_program():
+    """They start with SIGINT, SIGTERM, SIGHUP and SIGQUIT blocked, so the system hands those to the main
+    thread, whose wait they interrupt; the main thread's own mask is put back."""
+    seen = []
+    before = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+    blocked = runner._block_ending_signals()
+    try:
+        thread = threading.Thread(target=lambda: seen.append(signal.pthread_sigmask(signal.SIG_BLOCK, [])))
+        thread.start()
+        thread.join()
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
+    assert blocked == before and signal.pthread_sigmask(signal.SIG_BLOCK, []) == before
+    assert {signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT} <= seen[0]
+
+
 # ---------------------------------------------------------------------------
 # Signals, through a real wrapper process
 # ---------------------------------------------------------------------------
