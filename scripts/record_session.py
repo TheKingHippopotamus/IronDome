@@ -16,13 +16,16 @@ policy only: no Touch ID prompt appears). Standard library only.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import os
 import re
 import select
 import shutil
 import signal
+import struct
 import sys
 import tempfile
+import termios
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -33,12 +36,18 @@ BRAVO_PASSWORD = "a different password for bravo"  # noqa: S105
 TOTP_SECRET = "JBSWY3DPEHPK3PXP"  # noqa: S105 - the example seed from RFC 6238 tutorials
 
 # (command, answers): each answer is (prompt regex, reply). A reply of None
-# means "press Enter".
+# means "press Enter". Answers are given in order; one whose regex starts with
+# OPTIONAL is skipped when the prompt after it shows up first (a Mac with
+# Touch ID asks how the vault should open; other machines do not ask).
 Step = Tuple[str, List[Tuple[str, Optional[str]]]]
+OPTIONAL = "(?#optional)"
+# Enter takes the default: the master password plus this machine's security chip.
+HOW_TO_OPEN = (OPTIONAL + r"Choose 1, 2 or 3 \[1\]: ", None)
 
 SCENES: List[Tuple[str, List[Step]]] = [
     ("setup", [
         ("irondome init", [
+            HOW_TO_OPEN,
             (r"New master password: ", PASSWORD),
             (r"Repeat it: ", PASSWORD),
             (r"(?i)press enter|saved it", None),
@@ -54,6 +63,7 @@ SCENES: List[Tuple[str, List[Step]]] = [
     ]),
     ("bunkers", [
         ("irondome bunker create bravo", [
+            HOW_TO_OPEN,
             (r"New master password: ", BRAVO_PASSWORD),
             (r"Repeat it: ", BRAVO_PASSWORD),
             (r"(?i)press enter|saved it", None),
@@ -103,6 +113,8 @@ class Shell:
 
     def __init__(self, env: Dict[str, str], cwd: Path) -> None:
         pid, fd = os.forkpty()
+        if pid != 0:  # wide enough that no typed command is wrapped or scrolled when the shell echoes it
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 50, 250, 0, 0))
         if pid == 0:  # child
             os.chdir(str(cwd))
             os.execve("/bin/bash", ["bash", "--noprofile", "--norc"], env)  # noqa: S606 - the shell being recorded
@@ -130,33 +142,59 @@ class Shell:
         marker = f"__done_{time.monotonic_ns()}__"
         os.write(self.fd, (f"{command}; printf '\\n{marker}\\n'\n").encode())
         pending = list(answers)
+        answered = 0  # how much of what this command showed has been matched to an answer
         seen = b""
         deadline = time.monotonic() + timeout
-        while marker.encode() not in seen.split(b"printf", 1)[-1] or not seen.rstrip().endswith(marker.encode()):
+        # Done when printf's own line arrives: the marker between two real line
+        # breaks. The echo of the typed command holds the marker too, but
+        # between a backslash-n and a quote, never on a line of its own.
+        done = re.compile(rb"\n" + marker.encode() + rb"\r?\n")
+        while not done.search(seen):
             if time.monotonic() > deadline:
-                raise SystemExit(f"timed out waiting for: {command}")
+                shown = seen.decode("utf-8", "replace")[-400:]
+                raise SystemExit(f"timed out waiting for: {command}\nthe terminal showed:\n{shown}")
             chunk = self._read(0.2)
             seen += chunk
-            text = seen.decode("utf-8", "replace")
-            if pending and re.search(pending[0][0], text.split(command, 1)[-1]):
-                reply = pending.pop(0)[1]
-                time.sleep(0.15)
-                os.write(self.fd, ((reply or "") + "\n").encode())
+            shown = seen.decode("utf-8", "replace").split(command, 1)[-1]
+            while len(pending) > 1 and pending[0][0].startswith(OPTIONAL) and not re.search(pending[0][0], shown):
+                if not re.search(pending[1][0], shown[answered:]):
+                    break
+                pending.pop(0)  # the optional prompt never came; the one after it did
+            if pending:
+                match = re.search(pending[0][0], shown[answered:])
+                if match:
+                    answered += match.end()
+                    reply = pending.pop(0)[1]
+                    time.sleep(0.15)
+                    os.write(self.fd, ((reply or "") + "\n").encode())
         text = seen.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "")
         body = text.split("\n", 1)[1] if "\n" in text else ""  # drop the echoed command line
         body = body.split(marker)[0]
         return body.rstrip("\n")
 
     def close(self) -> None:
+        """End the shell. Its output is read until it is gone: a shell with unread output never finishes exiting."""
         try:
             os.write(self.fd, b"exit\n")
-            time.sleep(0.2)
-            os.kill(self.pid, signal.SIGTERM)
         except OSError:
             pass
+        deadline = time.monotonic() + 5.0
+        while True:
+            self._read(0.1)
+            try:
+                if os.waitpid(self.pid, os.WNOHANG)[0] == self.pid:
+                    break
+            except ChildProcessError:
+                break
+            if time.monotonic() > deadline:
+                try:
+                    os.killpg(os.getpgid(self.pid), signal.SIGKILL)  # the shell and whatever it was still running
+                except OSError:
+                    pass
+                deadline = float("inf")
         try:
-            os.waitpid(self.pid, 0)
-        except ChildProcessError:
+            os.close(self.fd)
+        except OSError:
             pass
 
 
