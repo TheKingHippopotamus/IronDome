@@ -9,7 +9,10 @@ resolution-markers = [
 ]
 
 [manifest]
-build-constraints = [{ name = "setuptools", specifier = "==84.2.1" }]
+build-constraints = [
+    { name = "setuptools", marker = "python_full_version < '3.10'", specifier = "==82.0.1" },
+    { name = "setuptools", marker = "python_full_version >= '3.10'", specifier = "==84.2.1" },
+]
 
 [[package]]
 name = "ast-serialize"

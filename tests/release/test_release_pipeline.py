@@ -154,6 +154,17 @@ def test_the_build_backend_is_pinned_by_hash_inside_the_range_pyproject_declares
     assert version_tuple(pinned) >= version_tuple(floor.group(1))
 
 
+def test_the_editable_builds_use_the_release_pin_and_one_that_still_runs_on_python_39():
+    """The pin `uv sync` builds with is the release's; setuptools 83 dropped 3.9, the oldest Python tested."""
+    (release_pin,) = [token for token in build_constraints() if not token.startswith("--")]
+    pins = pyproject()["tool"]["uv"]["build-constraint-dependencies"]
+    by_marker = {marker.strip(): pin.strip() for pin, _, marker in (item.partition(";") for item in pins)}
+    assert set(by_marker) == {"python_full_version >= '3.10'", "python_full_version < '3.10'"}, pins
+    assert by_marker["python_full_version >= '3.10'"] == release_pin
+    older = re.fullmatch(r"setuptools==(\d+(?:\.\d+)*)", by_marker["python_full_version < '3.10'"])
+    assert older and (77,) <= version_tuple(older.group(1)) < (83,), pins
+
+
 # -- supply:2, the release workflow ----------------------------------------------------------
 
 
