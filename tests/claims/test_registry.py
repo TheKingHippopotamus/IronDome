@@ -238,9 +238,11 @@ def test_the_readme_sample_session_prints_exactly_what_the_program_prints(cli):
             blocks[-1].append(line)
     commands = [block[0] for block in blocks]
     assert commands[0].startswith("$ irondome add github --kind secret --alias GITHUB_TOKEN")
-    assert commands[1].startswith("$ irondome grant create GITHUB_TOKEN --ttl 15m")
-    agent = "irondome run --env GITHUB_TOKEN -- sh -c 'echo \"got $GITHUB_TOKEN\"'"
-    assert [command.split("… ", 1)[-1] for command in commands[2:]] == [agent, agent]
+    # The token is never shown or typed: the shell puts it straight into the agent's environment.
+    assert commands[1].startswith('$ export IRONDOME_GRANT="$(irondome grant create GITHUB_TOKEN --ttl 15m)"')
+    agent = "$ irondome run --env GITHUB_TOKEN -- sh -c 'echo \"got $GITHUB_TOKEN\"'"
+    assert commands[2:] == [agent, agent]
+    assert "irondome_g_" not in "\n".join(_readme_hero())
     init_done = cli("init", "--password-stdin", stdin=PASSWORD + "\n")
     assert init_done.returncode == 0, init_done.stderr
     # The same commands with what the reader types at the prompts on stdin instead.
@@ -297,7 +299,7 @@ def test_site_data_writes_what_the_website_reads_and_checks_it(tmp_path):
     assert written.returncode == 0, written.stderr
     counts = json.loads((site / "src" / "data" / "counts.json").read_text(encoding="utf-8"))
     assert set(counts) == {"version", "tests", "claims", "files", "python"}
-    assert counts["claims"] == len(claims()) and counts["python"] == "3.9–3.14"
+    assert counts["claims"] == len(claims()) and counts["python"] == "3.9.2–3.14"
     assert sum(counts["files"].values()) == counts["tests"] and "tests/claims" in counts["files"]
     assert (site / "src" / "data" / "claims.json").read_bytes() == REGISTRY.read_bytes()
     assert subprocess.run(run + ["--check"], capture_output=True, timeout=600).returncode == 0

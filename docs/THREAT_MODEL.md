@@ -1,8 +1,9 @@
 # Threat model
 
-What IronDome 4 protects, against whom, and where it stops. Every guarantee
-below is checked by a test listed in [CLAIMS.md](CLAIMS.md), and you can run
-the same checks on your own machine with `irondome verify`.
+What IronDome 4 protects, against whom, and where it stops. Every claim cited
+below is held by the tests listed in [CLAIMS.md](CLAIMS.md). `irondome verify`
+runs the checks for most of them again on your own machine; CLAIMS.md says
+which ones only the test suite checks.
 
 ## What is being protected
 
@@ -22,7 +23,9 @@ A stolen backup, a synced folder, a disk image, a laptop thief who pulls the
 SSD, a cloud provider.
 
 They get ciphertext. Entry names, usernames, URLs and tags are encrypted too;
-only the number of entries and their padded sizes are visible.
+what stays visible is how many entries there are and their padded sizes, when
+the vault was created and how often it has been written, and how it opens
+(keyslot kinds, backend, Argon2id cost).
 
 They **cannot guess your master password**, however weak, because the
 key-encryption key is derived from Argon2id(password) **and** the device
@@ -66,9 +69,10 @@ two parts.
   prevent that.
 
 **While a command is running:** IronDome keeps the window small. IronDome
-holds key material only in locked memory and wipes it when the command
+holds key material only in memory outside the Python heap, locked into RAM
+where the system allows it, and wipes it when the command
 finishes (the copy `cryptography` makes of the master password inside Argon2id
-is out of its reach: see the limits below). IronDome
+is cleaned up afterwards, best effort: see the limits below). IronDome
 turns off core dumps for itself, and on Linux marks itself non-dumpable so
 other processes of the same user cannot attach to it or read its memory
 (claim [`process-hardened`](CLAIMS.md#process-hardened); `IRONDOME_DEBUG=1`
@@ -173,8 +177,12 @@ with the old key and shows what it held then.
   runs. Only IronDome's own copies of *key material* stay in locked, wiped
   memory.
 * **Copies made inside `cryptography`.** Argon2id copies the master password
-  it is given into memory it frees without overwriting. The copy lasts until
-  that memory is reused, and IronDome cannot wipe it. HKDF leaves a copy of
+  it is given into memory it frees without overwriting. IronDome cannot
+  prevent that copy, only clean up after it: on Linux it searches the process
+  heap for the copy right after the derivation and zeroes it, and on macOS the
+  system zeroes small freed blocks by default. Neither is certain (the
+  boundary lists where it fails), and a copy that is left lasts until that
+  memory is reused. HKDF leaves a copy of
   each key it derives on the C stack and in freed memory; IronDome overwrites
   it by deriving again from zeros, which holds as long as the library takes
   the same path through its code both times (the tests check that it does).
@@ -235,5 +243,8 @@ with the old key and shows what it held then.
 | One-time passwords | TOTP (RFC 6238) | SHA-1/256/512, 6-8 digits |
 | Randomness | Operating system CSPRNG | |
 
-All of it comes from one dependency, [`cryptography`](https://cryptography.io)
-(pyca), which wraps OpenSSL. IronDome implements no primitive itself.
+Argon2id, HKDF, AES-GCM and P-256 come from one dependency,
+[`cryptography`](https://cryptography.io) (pyca), which wraps OpenSSL. One-time
+codes are RFC 4226 and RFC 6238 over the standard library's HMAC, and
+randomness is the operating system's. IronDome implements no cipher, hash or
+key-derivation function itself.

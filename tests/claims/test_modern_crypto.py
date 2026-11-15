@@ -1,4 +1,4 @@
-"""Claim ``modern-crypto``: Argon2id and AES-256-GCM, from one audited library.
+"""Claim ``modern-crypto``: Argon2id and AES-256-GCM, from one widely used library.
 
 Statement: master passwords are stretched with Argon2id (by default 256 MiB,
 3 passes and 4 lanes, and 64 MiB, RFC 9106's low-memory choice, on a machine

@@ -8,7 +8,7 @@
 
 A local vault for passwords, API keys and one-time codes, bound to your Mac's
 Secure Enclave or a TPM 2.0 on Linux. No cloud, no account, no network code, one
-dependency.
+direct dependency.
 
 [![PyPI](https://img.shields.io/pypi/v/IronDome?color=9bae4a&label=pypi)](https://pypi.org/project/IronDome/)
 [![Python](https://img.shields.io/pypi/pyversions/IronDome?color=9bae4a)](https://pypi.org/project/IronDome/)
@@ -25,9 +25,8 @@ Master password:
 Value for github:
 ok  added github to bunker alpha, with the alias GITHUB_TOKEN
 
-$ irondome grant create GITHUB_TOKEN --ttl 15m              # this one secret, one use, 15 minutes
+$ export IRONDOME_GRANT="$(irondome grant create GITHUB_TOKEN --ttl 15m)"   # this one secret, one use, 15 minutes
 Master password:
-irondome_g_ae19…
 ok  grant ae1966316c57 created in bunker alpha
   covers   GITHUB_TOKEN (github/password)
   mode     use: the values can only be injected into a command by irondome run
@@ -36,10 +35,10 @@ ok  grant ae1966316c57 created in bunker alpha
   id       ae1966316c5734dbf401dae402229716
 The token is a bearer secret: whoever holds it can use the grant. Give it to one agent, keep it out of files and chats, and revoke it with: irondome grant revoke ae1966316c57
 
-$ IRONDOME_GRANT=irondome_g_ae19… irondome run --env GITHUB_TOKEN -- sh -c 'echo "got $GITHUB_TOKEN"'
+$ irondome run --env GITHUB_TOKEN -- sh -c 'echo "got $GITHUB_TOKEN"'
 got [irondome:GITHUB_TOKEN]
 
-$ IRONDOME_GRANT=irondome_g_ae19… irondome run --env GITHUB_TOKEN -- sh -c 'echo "got $GITHUB_TOKEN"'
+$ irondome run --env GITHUB_TOKEN -- sh -c 'echo "got $GITHUB_TOKEN"'
 error  that grant token opens nothing here: the grant was used up, expired or revoked, or it was made on another machine. Its owner can make a new one with: irondome grant create
 ```
 
@@ -57,7 +56,7 @@ $ pipx install IronDome        # or: uv tool install IronDome / pip install Iron
 Python 3.9.2 or newer, tested on 3.9 through 3.14. macOS on Apple silicon, and Linux.
 Intel Macs are untested: `cryptography` publishes no macOS wheel for them, so installing
 there builds it from source, which needs Rust and OpenSSL. On a Mac, Touch ID
-and Secure Enclave support compiles a 250-line Swift helper on first use (needs the
+and Secure Enclave support compiles a Swift helper of about 250 lines on first use (needs the
 Xcode Command Line Tools; nothing is downloaded). On Linux the TPM 2.0 is reached
 through `tpm2-tools`. Without a usable chip or those tools, the device key is a
 file in your home directory, and `irondome init` and `irondome status` say so.
@@ -150,8 +149,8 @@ the bunker that issued it.
 The agent side is one environment variable and one command:
 
 ```console
-$ export IRONDOME_GRANT=irondome_g_…
-$ irondome run --env GITHUB_TOKEN -- gh pr create --fill
+$ export IRONDOME_GRANT="$(irondome grant create GITHUB_TOKEN --ttl 15m)"   # you, in the shell that starts the agent
+$ irondome run --env GITHUB_TOKEN -- gh pr create --fill                    # the agent
 ```
 
 **MCP.** `irondome mcp` is a Model Context Protocol server (stdio, no extra
@@ -176,10 +175,10 @@ narrow, short-lived grants, and rotate what they used.
 | Device binding | Secure Enclave (macOS) · TPM 2.0 NV storage (Linux) · file-based fallback, labelled as such |
 | Touch ID | Enforced by the Secure Enclave on the key operation, not by a prompt in front of a readable key |
 | Wrong guesses | On a TPM, checked and rate-limited by the chip |
-| Memory | IronDome keeps keys in locked pages outside the Python heap and wipes them; a test scans process memory to prove it. Argon2id inside the `cryptography` library leaves a copy of the master password IronDome cannot wipe (see the claim's boundary) |
-| Self-destruct | `irondome nuke` destroys the device secrets first: a restored copy of the vault no longer opens with the master password (a recovery key you kept still opens it) |
+| Memory | IronDome keeps keys in pages outside the Python heap, locked into RAM where the system allows it, and wipes them; a test scans process memory to prove it. Argon2id inside the `cryptography` library leaves a copy of the master password, which IronDome can only clean up afterwards, best effort (see the claim's boundary) |
+| Self-destruct | `irondome nuke` destroys the device secrets first: a restored copy of the vault no longer opens with the master password (a recovery key you kept still opens it, and so does a backup made with `irondome export`) |
 | Network | None: no module imports a networking library, and every command works with socket creation disabled |
-| Dependencies | One: [`cryptography`](https://cryptography.io) |
+| Dependencies | One direct dependency: [`cryptography`](https://cryptography.io), which brings `cffi` and `pycparser` (and `typing-extensions` on Python 3.9 and 3.10) |
 
 Read [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for who each of these stops
 and who it does not.
@@ -200,11 +199,14 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
 * **It has not been audited by a third party.** The tests are ours. Treat it as
   beta software.
 * **It cannot protect you from malware that already runs as you** while a vault
-  is open, or from a compromised operating system.
+  is open, or from a compromised operating system. A keylogger can capture a
+  master password, and malware can raise a Touch ID prompt of its own: read
+  the prompt before you touch.
 * **Decrypted entries are ordinary strings** for as long as a command runs.
   Only IronDome's own copies of key material stay in locked, wiped memory:
-  Argon2id inside `cryptography` leaves a copy of the master password it
-  cannot wipe.
+  Argon2id inside `cryptography` leaves a copy of the master password, which
+  IronDome zeroes afterwards on Linux, best effort, and macOS zeroes by
+  default when the block is freed.
 * **Masking stops accidents, not intent.** A command that transforms a secret
   on purpose gets it through, and a `--reveal` grant or an entry marked
   `--agent reveal` lets an agent see the value.
@@ -215,15 +217,21 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   process that can write the bunker's `caps/` directory can put a copy back,
   and the grant works again until it expires. `irondome rekey` ends that: it
   destroys the device secret every session and grant is bound to.
-* **A recovery key outlives `nuke`.** If you keep one on paper and a copy of
-  the vault file survives somewhere, that copy opens.
+* **A recovery key and an exported backup outlive `nuke`.** If you keep a
+  recovery key on paper and a copy of the vault file survives somewhere, that
+  copy opens; create the vault with `--no-recovery` if you would rather lose
+  the data. A portable backup made with `irondome export` opens with its own
+  password wherever it is.
 * **Bunkers separate vaults, not operating-system accounts.** Every bunker
   belongs to the same user; malware running as that user faces each of them
   the same way.
 * **Restoring an older copy of the whole vault file is not detected**, and
   neither is deleting the newest lines of the audit log, or the whole log.
-* **The number of entries and the time of the last change are visible** to
-  anyone who can read the vault file.
+* **The vault file shows a little.** Anyone who can read it sees how many
+  entries there are and the padded size of each, when the vault was created
+  and how many times it has been written, and how it opens (keyslot kinds,
+  backend, Argon2id cost). Names, usernames, URLs, tags and values are not
+  visible.
 * **No hardware backend on Windows yet**, and Windows is not covered by the
   test suite.
 

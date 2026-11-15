@@ -129,9 +129,10 @@ uses them is in scope.
 
 ## How the project guards its own supply chain
 
-* One runtime dependency, `cryptography>=50.0.2`. The floor is the first
-  release with no known advisory. CI, every week and before every release,
-  runs `pip-audit` (itself installed from `uv.lock`) over everything
+* One direct runtime dependency, `cryptography>=50.0.2`. The floor is the
+  first release with no known advisory. `scripts/check.sh`, the gate run before
+  every release, and the CI workflow, every week and on every change, run
+  `pip-audit` (itself installed from `uv.lock`) over everything
   `uv.lock` pins: the runtime dependencies, the dev extra and the CI tools.
 * No dependency release is used until it has been public for seven days
   (`exclude-newer` in `pyproject.toml`, a cooldown in Dependabot).

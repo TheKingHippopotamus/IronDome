@@ -13,7 +13,7 @@ How IronDome 4 is put together. For what it defends against, read
    chip, or, where there is none, sits in a file in the device directory,
    outside the vault. Without the machine there is nothing to attack. The
    deliberate exceptions are portable: the recovery slot, and the one password
-   slot of a file written by `irondome backup`.
+   slot of a file written by `irondome export`.
 4. An AI agent never gets the vault key or your password. It gets a **grant**:
    a separate, expiring snapshot of exactly the values you named, good for
    one use unless you allow more.
@@ -47,7 +47,7 @@ file backends ignore it.
 | password | Argon2id(master password) + device secret | the password, on this machine |
 | device | device secret under a biometric policy | Touch ID, on this machine |
 | recovery | a 160-bit key shown once | the recovery key, on any machine |
-| backup password | Argon2id(backup password), no device secret | the password, on any machine (only in a file written by `irondome backup`) |
+| backup password | Argon2id(backup password), no device secret | the password, on any machine (only in a file written by `irondome export`) |
 
 Setup modes are just combinations of slots:
 
@@ -139,14 +139,19 @@ records:   { entry id: AES-256-GCM( entry key ) }   password, TOTP seed, notes, 
   lengths.
 * Writes are atomic (temp file, fsync, rename, fsync of the directory),
   serialised by a lock file, and the previous file is kept as a snapshot.
+  Changing the password, the keyslots or the recovery key deletes the
+  snapshots, because they would still open the old way.
 * Not detected: a rollback of the *whole* file to an earlier copy (that needs
-  a counter outside the file). Not hidden: the number of entries.
+  a counter outside the file). Not hidden: the number of entries and their
+  padded sizes, when the vault was created and how often it has been written,
+  and how it opens (keyslot kinds, backend, Argon2id cost).
 
 ## Memory
 
 Key material — the password as typed, Argon2id output, device secret,
 key-encryption key, vault key, subkeys — lives only in `SecureBuffer`s:
-anonymous pages outside the Python heap, locked into RAM, filled in place
+anonymous pages outside the Python heap, locked into RAM where the system
+allows it (`irondome doctor` warns when it does not), filled in place
 (the KDFs derive *into* them, the cipher decrypts *into* them, the Secure
 Enclave helper's pipe is read *into* them) and overwritten with zeros as soon
 as they are done with. On Linux those pages are also left out of core dumps

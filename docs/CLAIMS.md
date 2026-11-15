@@ -18,9 +18,9 @@ Run the checks on your own machine with `irondome verify` (`irondome verify --cl
 | [`keys-wiped`](#keys-wiped) | Key material is wiped from memory | macOS, Linux | 29 | `keys_wiped` |
 | [`everything-encrypted`](#everything-encrypted) | Names, usernames, URLs and tags are encrypted, not just passwords | macOS, Linux | 7 | `everything_encrypted` |
 | [`tamper-evident`](#tamper-evident) | Altered, swapped or rolled-back records are rejected | macOS, Linux | 10 | `tamper_evident` |
-| [`modern-crypto`](#modern-crypto) | Argon2id and AES-256-GCM, from one audited library | macOS, Linux | 19 | `modern_crypto` |
+| [`modern-crypto`](#modern-crypto) | Argon2id and AES-256-GCM, from one widely used library | macOS, Linux | 19 | `modern_crypto` |
 | [`no-network`](#no-network) | IronDome cannot make a network connection | macOS, Linux | 9 | `no_network` |
-| [`one-dependency`](#one-dependency) | One runtime dependency | macOS, Linux | 6 | `one_dependency` |
+| [`one-dependency`](#one-dependency) | One direct dependency | macOS, Linux | 6 | `one_dependency` |
 | [`owner-only-files`](#owner-only-files) | Every file is owner-only and every write is atomic | macOS, Linux | 9 | `owner_only_files` |
 | [`grants-are-scoped`](#grants-are-scoped) | A grant opens only what it names, for as long as it says | macOS, Linux | 17 | `grants_are_scoped` |
 | [`grants-hold-no-keys`](#grants-hold-no-keys) | A grant never contains the vault key, the master password or an OTP seed | macOS, Linux | 8 | `grants_hold_no_keys` |
@@ -99,7 +99,7 @@ Tests (9):
 
 **Touch ID is enforced by the Secure Enclave, not by IronDome**
 
-A keyslot under the biometry policy uses a Secure Enclave key created with the biometryCurrentSet access control. The chip refuses the key operation until its sensor reports a match for a currently enrolled finger. Asked to operate without user interaction, the key answers 'authentication required' instead of producing a secret.
+A keyslot under the biometry policy uses a Secure Enclave key created with the biometryCurrentSet access control. The chip refuses the key operation until its sensor reports a match for a currently enrolled finger. Asked to operate without user interaction, the key produces no secret: the operation fails with 'authentication is required to use this key'.
 
 *Where it stops:* macOS only. The automated suite proves the refusal; the acceptance needs a finger and is checked with `irondome verify --touch`. Adding or removing a fingerprint invalidates the key (use the master password or recovery key, then enrol again). The prompt names the helper program, not the caller.
 
@@ -177,9 +177,9 @@ Tests (13):
 
 **Key material is wiped from memory**
 
-IronDome keeps its copies of the master password, the Argon2id output, the device secret, the key-encryption key, the vault key and every subkey only in locked memory outside the Python heap, and overwrites them when the vault is locked; Argon2id and HKDF write their output straight into those buffers, and every HKDF derivation is run a second time with an all-zero key, which overwrites the copy the library leaves of the key it derived. After a full session, a scan of the process's entire address space finds no copy of any of them.
+IronDome keeps its copies of the master password, the Argon2id output, the device secret, the key-encryption key, the vault key and every subkey only in memory outside the Python heap, locked into RAM where the system allows it, and overwrites them when the vault is locked; Argon2id and HKDF write their output straight into those buffers, and every HKDF derivation is run a second time with an all-zero key, which overwrites the copy the library leaves of the key it derived. After a full session, a scan of the process's entire address space finds no copy of any of them.
 
-*Where it stops:* pyca/cryptography and the OpenSSL it bundles make a copy IronDome cannot wipe: Argon2id copies the master password it is given into memory it frees without overwriting. It lasts until that memory is reused. On macOS, which zeroes small freed blocks by default, the scan after a full session does not find it; with that zeroing turned off (MallocZeroOnFree=0, as glibc on Linux always behaves) the scan can find it. HKDF leaves a copy of each key it derives on the C stack and in memory it frees; IronDome cannot wipe that either, and overwrites it by deriving again from zeros. That rests on the library taking the same path through its code both times, which the tests check on every supported Python and IronDome does not control. A non-ASCII master password is normalised with Python's unicodedata, which frees its own working copies of the text, as 4-byte code points, without overwriting them; the two strings IronDome makes for it are zeroed in place on CPython. Decrypted entries are ordinary Python strings for as long as a command runs. Session and grant tokens are bearer secrets that live in your shell's environment by design. The recovery key is text you are shown once and may type back: as text it is an ordinary Python string, not locked memory, for as long as a command holds it. A process with debugger rights over a running IronDome can read anything.
+*Where it stops:* pyca/cryptography and the OpenSSL it bundles copy the master password given to Argon2id into memory they free without overwriting. IronDome cannot prevent that copy, only clean up after it: on Linux it searches the process heap for the copy right after the derivation and zeroes it, and on macOS the system zeroes small freed blocks by default. Neither is certain. On Linux the search is skipped for a password shorter than 8 bytes, and finds nothing where the kernel refuses process_vm_readv or the C library keeps small blocks outside the heap mapping (the tests cover glibc); on macOS with that zeroing turned off (MallocZeroOnFree=0) the scan can find the copy. Where the copy is left, it lasts until that memory is reused. HKDF leaves a copy of each key it derives on the C stack and in memory it frees; IronDome cannot wipe that either, and overwrites it by deriving again from zeros. That rests on the library taking the same path through its code both times, which the tests check on every supported Python and IronDome does not control. A non-ASCII master password is normalised with Python's unicodedata, which frees its own working copies of the text, as 4-byte code points, without overwriting them; the two strings IronDome makes for it are zeroed in place on CPython. Decrypted entries are ordinary Python strings for as long as a command runs. Session and grant tokens are bearer secrets that live in your shell's environment by design. The recovery key is text you are shown once and may type back: as text it is an ordinary Python string, not locked memory, for as long as a command holds it. Locking the pages is best effort: where the system refuses it (a low RLIMIT_MEMLOCK, for one), the keys are still kept outside the Python heap and overwritten, but could be written to swap, and `irondome doctor` warns. A process with debugger rights over a running IronDome can read anything.
 
 - Platforms: macOS, Linux
 - Closes L4: 3.x: the key was never zeroed in memory (immutable bytes inside a Fernet object).
@@ -223,7 +223,7 @@ Tests (29):
 
 No entry name, username, URL, tag, alias, note or password appears in the vault file, its snapshots or the audit log. Record sizes are padded so they do not reveal password lengths.
 
-*Where it stops:* The number of entries and the time of the last change are visible to anyone who can read the file.
+*Where it stops:* Visible to anyone who can read the file: how many entries there are and the padded size of each, when the vault was created and how many times it has been written, and how it opens (the kind, label, backend and Argon2id cost of each keyslot). The snapshots show which records changed with each write.
 
 - Platforms: macOS, Linux
 - On your machine: `irondome verify --claim everything-encrypted` (check `everything_encrypted`)
@@ -264,7 +264,7 @@ Tests (10):
 
 ## modern-crypto
 
-**Argon2id and AES-256-GCM, from one audited library**
+**Argon2id and AES-256-GCM, from one widely used library**
 
 Master passwords are stretched with Argon2id (by default 256 MiB, 3 passes and 4 lanes, and 64 MiB, RFC 9106's low-memory choice, on a machine with less than 3 GiB of RAM; never below the OWASP minimum), keys are derived with HKDF-SHA256 and data is encrypted with AES-256-GCM using random 96-bit nonces. IronDome implements no primitive itself; all of them come from pyca/cryptography and are checked against published test vectors.
 
@@ -321,11 +321,11 @@ Tests (9):
 
 ## one-dependency
 
-**One runtime dependency**
+**One direct dependency**
 
 The package depends on the Python standard library and on `cryptography`, and on nothing else. The only native code is a Secure Enclave helper compiled on your machine from source shipped in the package.
 
-*Where it stops:* `cryptography` itself bundles OpenSSL.
+*Where it stops:* `cryptography` bundles OpenSSL and brings what it depends on itself: `cffi` and `pycparser`, and `typing-extensions` on Python 3.9 and 3.10.
 
 - Platforms: macOS, Linux
 - On your machine: `irondome verify --claim one-dependency` (check `one_dependency`)

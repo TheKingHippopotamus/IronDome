@@ -8,10 +8,11 @@ The version number lives in exactly one place, `src/irondome/__init__.py`;
 
 ## [4.0.0] — unreleased
 
-A new vault, a new command line and a new purpose. Version 3 published five
-things it could not do: four on its website, one (the cipher) on its PyPI page.
-Version 4 exists to make that list false, and to make the vault usable by AI
-agents without handing them the vault.
+A new vault, a new command line and a new purpose. Version 3 published six
+things it could not do: five on its website, and the cipher on its PyPI page.
+Version 4 exists to make five of them false, and to make the vault usable by AI
+agents without handing them the vault. The sixth, no independent audit, still
+stands.
 
 **This is a breaking release.** The vault format, the data directory, the
 Python package name and every command changed. `irondome migrate` converts a
@@ -48,10 +49,11 @@ Each is now a claim in `docs/CLAIMS.md` with the tests that hold it, and
   the system allows it (`irondome doctor` warns when it does not), and
   overwritten when the vault locks. A test scans the whole address space of
   the process on macOS and Linux after a full session and requires zero hits.
-  One copy stays outside IronDome's reach: Argon2id in `cryptography`
+  One copy is made outside IronDome's reach: Argon2id in `cryptography`
   (OpenSSL) copies the master password into memory it frees without
-  overwriting. A scan with freed memory left unzeroed can find it; the
-  claim's boundary says so and tests it. HKDF leaves a copy of each key it
+  overwriting. On Linux IronDome searches the heap for that copy right after
+  the derivation and zeroes it; macOS zeroes small freed blocks itself.
+  Neither is certain, and the claim's boundary says where it fails. HKDF leaves a copy of each key it
   derives on the C stack and in freed memory: IronDome derives again from
   zeros to overwrite it, and a scan made right after a derivation finds none.
 - **"The cipher is AES-128."** (3.x PyPI page.) Fernet's AES-128-CBC with
@@ -128,7 +130,7 @@ The new architecture removes all of them:
 - On a Mac, keys under the plain device policy work whenever the Mac has been
   unlocked once since it started, also while the screen is locked (SSH,
   scheduled jobs, agents with a grant); Touch ID keys need an unlocked screen.
-- **One runtime dependency:** `cryptography>=50.0.2`. `keyring` and `textual`
+- **One direct runtime dependency:** `cryptography>=50.0.2`. `keyring` and `textual`
   are gone: a default install drops from 21 packages to 3 (`cryptography` and
   its own two, `cffi` and `pycparser`; on Python 3.9 and 3.10 `cryptography`
   also requires `typing-extensions`, so 4).
@@ -185,7 +187,7 @@ The new architecture removes all of them:
 
 No independent audit. Decrypted entries are ordinary Python strings while a
 command runs. Argon2id inside `cryptography` leaves a copy of the master
-password that IronDome cannot wipe. Intel Macs are untested, and installing
+password that IronDome can only clean up afterwards, best effort. Intel Macs are untested, and installing
 there builds `cryptography` from source. A recovery key, and a portable backup made with
 `irondome export`, outlive `nuke`. Whole-file rollback is not detected. A
 grant's use count and a revoke rest on deleting its file, so a copy of the

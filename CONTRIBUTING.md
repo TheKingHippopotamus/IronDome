@@ -105,10 +105,10 @@ A claim that says more than its tests show is a bug.
 
 ## Rules for code
 
-* **Python 3.9.2 or newer.** CI runs the suite on Python 3.9, 3.11, 3.13 and
-  3.14, on Linux and macOS, so a feature newer than 3.9, such as `match` or an
+* **Python 3.9.2 or newer.** CI runs the suite on Python 3.9 through 3.14,
+  on Linux and macOS, so a feature newer than 3.9, such as `match` or an
   `X | Y` union evaluated at run time, fails there.
-* **One runtime dependency.** The standard library and `cryptography`, nothing
+* **One direct runtime dependency.** The standard library and `cryptography`, nothing
   else; `tests/claims/test_one_dependency.py` enforces it. Development tools
   go in the `dev` extra. After changing a dependency, run `uv lock`; it only
   picks releases that have been public for at least seven days.

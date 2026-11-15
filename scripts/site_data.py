@@ -7,8 +7,9 @@
 counts.json is ``{"version", "tests", "claims", "files", "python"}``: the
 IronDome version, the number of tests pytest collects in this repository, the
 number of claims, the tests per top-level test directory (or file directly
-under tests/), and the supported Python versions as the package metadata
-lists them. claims.json is a byte-for-byte copy of src/irondome/claims.json.
+under tests/), and the supported Python versions: from the oldest the package
+installs on (``requires-python``) to the newest its classifiers list.
+claims.json is a byte-for-byte copy of src/irondome/claims.json.
 The check also refuses a SITE_DIR/src/data/transcript.txt that still starts
 with "# PROVISIONAL" (a stand-in written by hand before a real recording).
 
@@ -42,12 +43,14 @@ def version() -> str:
 
 
 def python_range() -> str:
-    """'3.9–3.14': the oldest and newest Python the package classifiers list."""
-    found = re.findall(r'"Programming Language :: Python :: (3\.\d+)"', PYPROJECT.read_text(encoding="utf-8"))
-    if not found:
-        raise SystemExit(f"no Python version classifiers in {PYPROJECT}")
-    ordered = sorted(found, key=lambda text: tuple(int(part) for part in text.split(".")))
-    return f"{ordered[0]}–{ordered[-1]}"
+    """'3.9.2–3.14': the oldest Python the package installs on, and the newest its classifiers list."""
+    text = PYPROJECT.read_text(encoding="utf-8")
+    floor = re.search(r'^requires-python\s*=\s*">=\s*(3(?:\.\d+)+)"', text, re.MULTILINE)
+    found = re.findall(r'"Programming Language :: Python :: (3\.\d+)"', text)
+    if floor is None or not found:
+        raise SystemExit(f"no requires-python floor or no Python version classifiers in {PYPROJECT}")
+    newest = max(found, key=lambda version: tuple(int(part) for part in version.split(".")))
+    return f"{floor.group(1)}–{newest}"
 
 
 def collected() -> List[str]:
