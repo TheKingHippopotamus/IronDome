@@ -50,6 +50,7 @@ __all__ = [
     "BufferLike",
     "as_view",
     "wipe_bytes",
+    "scrub_heap_copies",
     "harden_process",
     "read_secret",
     "read_secret_from_fd",
@@ -404,6 +405,105 @@ def wipe_bytes(obj: Any) -> bool:
         ctypes.memset(id(obj) + offset, 0, len(obj))
         return True
     return False
+
+
+#: A secret shorter than this is not looked for by :func:`scrub_heap_copies`: so few bytes can turn up in the
+#: heap by chance, and zeroing them there would damage something that is in use.
+MIN_SCRUB_BYTES = 8
+_SCRUB_CHUNK = 256 * 1024
+
+
+class _IOVec(ctypes.Structure):
+    _fields_ = [("base", ctypes.c_void_p), ("len", ctypes.c_size_t)]
+
+
+def _heap_ranges() -> List[Tuple[int, int]]:
+    """The writable ``[heap]`` mappings of this process, where glibc's malloc keeps small blocks."""
+    ranges = []
+    with open("/proc/self/maps", encoding="ascii", errors="replace") as maps:
+        for line in maps:
+            fields = line.split()
+            if len(fields) >= 6 and fields[-1] == "[heap]" and fields[1].startswith("rw"):
+                low, _, high = fields[0].partition("-")
+                ranges.append((int(low, 16), int(high, 16)))
+    return ranges
+
+
+def scrub_heap_copies(secret: BufferLike) -> int:
+    """Zero every other copy of *secret* in this process's heap. Linux only. Returns how many were zeroed.
+
+    A native library that is handed a secret may copy it into memory it later
+    frees without overwriting: pyca/cryptography does that with the password
+    given to Argon2id. On Linux such a copy sits in the ``[heap]`` mapping,
+    where nothing zeroes it. This reads that mapping, looks for the exact
+    bytes of *secret*, and overwrites each match with zeros. A match is a
+    complete copy, so nothing but a copy is written to, and *secret* itself,
+    which lives outside the heap, is left alone.
+
+    The heap is read and written through ``process_vm_readv`` and
+    ``process_vm_writev`` on this process: the kernel does the copying, so a
+    part of the heap that has gone away in the meantime is an error code, never
+    a fault. Best effort: 0 on other systems, for a secret shorter than
+    ``MIN_SCRUB_BYTES``, where those calls are not allowed, and whenever
+    anything else goes wrong.
+    """
+    if not sys.platform.startswith("linux"):
+        return 0
+    anchor = None
+    zeroed = 0
+    try:
+        view = as_view(secret)
+        length = len(view)
+        libc = _get_libc()
+        if length < MIN_SCRUB_BYTES or view.readonly or libc is None:
+            return 0
+        anchor = (ctypes.c_char * length).from_buffer(view)
+        own = ctypes.addressof(anchor)
+        vector = [ctypes.c_int, ctypes.POINTER(_IOVec), ctypes.c_ulong, ctypes.POINTER(_IOVec), ctypes.c_ulong,
+                  ctypes.c_ulong]
+        read, write, find = libc.process_vm_readv, libc.process_vm_writev, libc.memmem
+        read.restype = write.restype = ctypes.c_ssize_t
+        read.argtypes = write.argtypes = vector
+        find.restype = ctypes.c_void_p
+        find.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
+        pid = os.getpid()
+        zeros = ctypes.create_string_buffer(length)
+        with SecureBuffer(_SCRUB_CHUNK + length) as scratch:  # it will hold whatever copy is found: wiped on exit
+            window = (ctypes.c_char * len(scratch)).from_buffer(scratch.view())
+            try:
+                base = ctypes.addressof(window)
+                for low, high in _heap_ranges():
+                    at = low
+                    while at < high:
+                        size = min(len(scratch), high - at)
+                        local, remote = _IOVec(base, size), _IOVec(at, size)
+                        got = read(pid, ctypes.byref(local), 1, ctypes.byref(remote), 1, 0)
+                        if got < length:
+                            break
+                        offset = 0
+                        while offset + length <= got:
+                            hit = find(base + offset, got - offset, own, length)
+                            if not hit:
+                                break
+                            offset = hit - base
+                            target = at + offset
+                            if target + length <= own or target >= own + length:
+                                source, there = _IOVec(ctypes.addressof(zeros), length), _IOVec(target, length)
+                                if write(pid, ctypes.byref(source), 1, ctypes.byref(there), 1, 0) == length:
+                                    zeroed += 1
+                            offset += 1
+                        if got < size:
+                            break
+                        at += got - (length - 1)  # overlap, so a copy across two reads is seen whole in the next
+                        if size < len(scratch):
+                            break
+            finally:
+                del window
+    except Exception:  # best effort by contract: the caller's work is done, this only tidies after a library
+        return zeroed
+    finally:
+        del anchor
+    return zeroed
 
 
 def harden_process() -> None:

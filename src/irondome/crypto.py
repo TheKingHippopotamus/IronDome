@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from irondome.errors import IronDomeError, VaultError
-from irondome.secmem import BufferLike, SecureBuffer, as_view, wipe_bytes
+from irondome.secmem import BufferLike, SecureBuffer, as_view, scrub_heap_copies, wipe_bytes
 
 __all__ = [
     "KEY_LEN",
@@ -173,6 +173,10 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
     except BaseException:
         out.wipe()
         raise
+    finally:
+        # pyca/cryptography copies the password into memory it frees without overwriting. On Linux nothing
+        # zeroes that block, so the copy is looked for in the heap and zeroed here (best effort; see the function).
+        scrub_heap_copies(password)
     return out
 
 

@@ -1286,3 +1286,46 @@ def test_windows_without_a_console_is_a_usage_error(monkeypatch):
     monkeypatch.setattr(secmem, "_IS_WINDOWS", True)
     with pytest.raises(UsageError, match="no terminal to ask on"):
         within(10, lambda: read_secret("Password: "))
+
+
+# -- scrub_heap_copies: the copy a native library leaves of a secret it was handed -------------
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the heap mapping is searched on Linux only")
+def test_a_copy_native_code_left_in_the_heap_is_zeroed_and_nothing_else_is_touched():
+    from irondome.secmem import SecureBuffer, scrub_heap_copies
+
+    libc = ctypes.CDLL(None)
+    libc.malloc.restype = ctypes.c_void_p
+    libc.malloc.argtypes = [ctypes.c_size_t]
+    libc.free.argtypes = [ctypes.c_void_p]
+    with SecureBuffer.random(24) as secret:
+        original = bytes(secret.view())
+        blocks = [libc.malloc(96) for _ in range(3)]
+        try:
+            for block in blocks:
+                ctypes.memset(block, 0x41, 96)
+            ctypes.memmove(blocks[0] + 20, original, 24)
+            ctypes.memmove(blocks[2] + 60, original, 24)
+            ctypes.memmove(blocks[1] + 8, original[:23], 23)  # all but the last byte: not a copy
+            assert scrub_heap_copies(secret) == 2
+            assert ctypes.string_at(blocks[0], 96) == b"A" * 20 + bytes(24) + b"A" * 52
+            assert ctypes.string_at(blocks[2], 96) == b"A" * 60 + bytes(24) + b"A" * 12
+            assert ctypes.string_at(blocks[1], 96) == b"A" * 8 + original[:23] + b"A" * 65
+            assert bytes(secret.view()) == original, "the secret itself is left alone"
+            assert scrub_heap_copies(secret) == 0, "nothing is left to find"
+        finally:
+            for block in blocks:
+                libc.free(block)
+
+
+def test_scrubbing_does_nothing_where_it_cannot_be_sure():
+    """A secret too short to be told from chance, bytes that cannot be pinned, any system but Linux: 0, no error."""
+    from irondome.secmem import MIN_SCRUB_BYTES, SecureBuffer, scrub_heap_copies
+
+    with SecureBuffer.random(MIN_SCRUB_BYTES - 1) as short:
+        assert scrub_heap_copies(short) == 0
+    assert scrub_heap_copies(b"an immutable secret of some length") == 0
+    if not sys.platform.startswith("linux"):
+        with SecureBuffer.random(32) as secret:
+            assert scrub_heap_copies(secret) == 0
