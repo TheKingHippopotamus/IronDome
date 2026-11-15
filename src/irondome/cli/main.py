@@ -44,8 +44,8 @@ getting started:
   irondome init                         create your first bunker (vault), alpha
   irondome add github --generate        store a new login with a generated password
   irondome get github                   print it      (-c copies it instead)
-  irondome run --env GITHUB_TOKEN -- gh repo list
-                                        run a command with a secret in its environment
+  irondome run --env GITHUB_TOKEN=github -- gh repo list
+                                        run a command with that secret in its environment
 
 for AI agents and scripts:
   irondome alias set GITHUB_TOKEN github        give a secret a name an agent can use
