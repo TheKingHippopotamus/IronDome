@@ -224,8 +224,15 @@ def test_an_unreadable_page_is_skipped_without_a_fault(scanner):
 
 
 def test_a_freed_bytes_copy_is_found_and_a_wiped_one_is_not(scanner):
-    """What keys-wiped is about: a key in a freed object is still there unless it was overwritten."""
+    """What keys-wiped is about: a key in a freed object is still there unless it was overwritten.
+
+    Garbage is collected before the copy is made, not after it is dropped: a
+    collection runs the finalizers of whatever earlier tests left behind, those
+    allocate, and the allocator hands them the block that was just freed. The
+    copy needs no collection to be freed; dropping the last reference does it.
+    """
     for wipe_first, expected in ((False, True), (True, False)):
+        gc.collect()
         table = memscan.NeedleTable(capacity=1, size=64)
         with random_key() as key:
             table.add(key)
@@ -233,7 +240,6 @@ def test_a_freed_bytes_copy_is_found_and_a_wiped_one_is_not(scanner):
         if wipe_first:
             wipe_bytes(copy)
         del copy
-        gc.collect()
         assert bool(scanner.scan(table, writable_only=True).hits[0]) is expected
 
 
