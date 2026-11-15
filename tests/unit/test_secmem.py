@@ -1288,44 +1288,63 @@ def test_windows_without_a_console_is_a_usage_error(monkeypatch):
         within(10, lambda: read_secret("Password: "))
 
 
-# -- scrub_heap_copies: the copy a native library leaves of a secret it was handed -------------
+# -- heap_copies and scrub_heap_copies: the copy a native library leaves of a secret it was handed --
 
 
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the heap mapping is searched on Linux only")
-def test_a_copy_native_code_left_in_the_heap_is_zeroed_and_nothing_else_is_touched():
-    from irondome.secmem import SecureBuffer, scrub_heap_copies
-
+def _malloc() -> Any:
     libc = ctypes.CDLL(None)
     libc.malloc.restype = ctypes.c_void_p
     libc.malloc.argtypes = [ctypes.c_size_t]
     libc.free.argtypes = [ctypes.c_void_p]
-    with SecureBuffer.random(24) as secret:
+    return libc
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="the heap mapping is searched on Linux only")
+def test_only_a_copy_that_appeared_since_the_heap_was_noted_is_zeroed_and_live_data_never_is():
+    """Bytes equal to the secret that were in the heap before the library ran are live data: an entry that
+    holds the password, a word a library keeps. They are left exactly as they are."""
+    from irondome.secmem import SecureBuffer, heap_copies, scrub_heap_copies
+
+    libc = _malloc()
+    with SecureBuffer(24) as secret:
+        secret.view()[:] = bytes(range(65, 89))
         original = bytes(secret.view())
-        blocks = [libc.malloc(96) for _ in range(3)]
+        live = [libc.malloc(96) for _ in range(2)]
+        left = None
         try:
-            for block in blocks:
-                ctypes.memset(block, 0x41, 96)
-            ctypes.memmove(blocks[0] + 20, original, 24)
-            ctypes.memmove(blocks[2] + 60, original, 24)
-            ctypes.memmove(blocks[1] + 8, original[:23], 23)  # all but the last byte: not a copy
-            assert scrub_heap_copies(secret) == 2
-            assert ctypes.string_at(blocks[0], 96) == b"A" * 20 + bytes(24) + b"A" * 52
-            assert ctypes.string_at(blocks[2], 96) == b"A" * 60 + bytes(24) + b"A" * 12
-            assert ctypes.string_at(blocks[1], 96) == b"A" * 8 + original[:23] + b"A" * 65
+            for block in live:
+                ctypes.memset(block, 0x2E, 96)
+            ctypes.memmove(live[0] + 20, original, 24)
+            ctypes.memmove(live[1] + 60, original, 24)
+            before = heap_copies(secret)
+            assert before is not None and {live[0] + 20, live[1] + 60} <= before
+            left = libc.malloc(96)  # what a library does: copy the secret, and (here, not yet) free the block
+            ctypes.memset(left, 0x2E, 96)
+            ctypes.memmove(left + 8, original, 24)
+            ctypes.memmove(left + 40, original[:23], 23)  # all but the last byte: not a copy
+            assert scrub_heap_copies(secret, before) == 1
+            assert ctypes.string_at(left, 96) == b"." * 8 + bytes(24) + b"." * 8 + original[:23] + b"." * 33
+            assert ctypes.string_at(live[0], 96) == b"." * 20 + original + b"." * 52, "live data is untouched"
+            assert ctypes.string_at(live[1], 96) == b"." * 60 + original + b"." * 12, "live data is untouched"
             assert bytes(secret.view()) == original, "the secret itself is left alone"
-            assert scrub_heap_copies(secret) == 0, "nothing is left to find"
+            assert scrub_heap_copies(secret, heap_copies(secret)) == 0, "nothing new: nothing is written"
         finally:
-            for block in blocks:
-                libc.free(block)
+            for block in live + [left]:
+                if block:
+                    libc.free(block)
 
 
-def test_scrubbing_does_nothing_where_it_cannot_be_sure():
-    """A secret too short to be told from chance, bytes that cannot be pinned, any system but Linux: 0, no error."""
-    from irondome.secmem import MIN_SCRUB_BYTES, SecureBuffer, scrub_heap_copies
+def test_the_heap_is_not_searched_where_the_search_cannot_be_trusted():
+    """Too short to be worth it, holding a zero byte, impossible to pin, any system but Linux: None, and then 0."""
+    from irondome.secmem import MIN_SCRUB_BYTES, SecureBuffer, heap_copies, scrub_heap_copies
 
     with SecureBuffer.random(MIN_SCRUB_BYTES - 1) as short:
-        assert scrub_heap_copies(short) == 0
-    assert scrub_heap_copies(b"an immutable secret of some length") == 0
-    if not sys.platform.startswith("linux"):
-        with SecureBuffer.random(32) as secret:
-            assert scrub_heap_copies(secret) == 0
+        assert heap_copies(short) is None and scrub_heap_copies(short, None) == 0
+    with SecureBuffer(16) as holed:
+        holed.view()[:] = b"abcdefg\x00ijklmnop"
+        assert heap_copies(holed) is None
+    assert heap_copies(b"an immutable secret of some length") is None
+    with SecureBuffer.random(32) as secret:
+        assert scrub_heap_copies(secret, None) == 0, "without a note of what was there before, nothing is written"
+        if not sys.platform.startswith("linux"):
+            assert heap_copies(secret) is None

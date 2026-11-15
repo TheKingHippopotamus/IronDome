@@ -5,8 +5,8 @@ output, the device secret, the key-encryption key, the vault key and every
 subkey only in memory outside the Python heap, locked into RAM where the system
 allows it, and overwrites them when the vault is locked; Argon2id and HKDF write their output straight into those
 buffers, and every HKDF derivation is run a second time with an all-zero key,
-which overwrites the copy the library leaves of the key it derived. After a
-full session, a scan of the process's entire address space finds no copy of
+which overwrites what the library leaves behind of the keys it worked with.
+After a full session, a scan of the process's entire address space finds no copy of
 any of them.
 
 Boundary tested here: the copy pyca/cryptography (OpenSSL) makes of the master

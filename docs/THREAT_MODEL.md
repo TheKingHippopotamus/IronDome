@@ -178,13 +178,14 @@ with the old key and shows what it held then.
   memory.
 * **Copies made inside `cryptography`.** Argon2id copies the master password
   it is given into memory it frees without overwriting. IronDome cannot
-  prevent that copy, only clean up after it: on Linux it searches the process
-  heap for the copy right after the derivation and zeroes it, and on macOS the
-  system zeroes small freed blocks by default. Neither is certain (the
+  prevent that copy, only clean up after it: on Linux it notes where the
+  password's bytes already are in the process heap, searches again right after
+  the derivation and zeroes only what is new, and on macOS the system zeroes
+  small freed blocks by default. Neither is certain (the
   boundary lists where it fails), and a copy that is left lasts until that
-  memory is reused. HKDF leaves a copy of
-  each key it derives on the C stack and in freed memory; IronDome overwrites
-  it by deriving again from zeros, which holds as long as the library takes
+  memory is reused. HKDF leaves its working keys, the one it extracts
+  and the one it derives, on the C stack and in freed memory; IronDome
+  overwrites them by deriving again from zeros, which holds as long as the library takes
   the same path through its code both times (the tests check that it does).
   A non-ASCII master
   password also leaves Python's `unicodedata` working copies in freed memory.

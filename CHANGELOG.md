@@ -51,11 +51,13 @@ Each is now a claim in `docs/CLAIMS.md` with the tests that hold it, and
   the process on macOS and Linux after a full session and requires zero hits.
   One copy is made outside IronDome's reach: Argon2id in `cryptography`
   (OpenSSL) copies the master password into memory it frees without
-  overwriting. On Linux IronDome searches the heap for that copy right after
-  the derivation and zeroes it; macOS zeroes small freed blocks itself.
-  Neither is certain, and the claim's boundary says where it fails. HKDF leaves a copy of each key it
-  derives on the C stack and in freed memory: IronDome derives again from
-  zeros to overwrite it, and a scan made right after a derivation finds none.
+  overwriting. On Linux IronDome notes where the password's bytes already are
+  in the heap, searches again right after the derivation and zeroes only what
+  is new; macOS zeroes small freed blocks itself. Neither is certain, and the
+  claim's boundary says where it fails. HKDF leaves its working keys, the one
+  it extracts and the one it derives, on the C stack and in freed memory:
+  IronDome derives again from zeros to overwrite them, and a scan made right
+  after a derivation finds none.
 - **"The cipher is AES-128."** (3.x PyPI page.) Fernet's AES-128-CBC with
   HMAC is replaced by AES-256-GCM, with one key per entry derived by HKDF.
 

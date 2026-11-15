@@ -41,7 +41,7 @@ import mmap
 import os
 import sys
 import time
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Set, Tuple, Union
 
 from irondome.errors import UsageError
 
@@ -50,6 +50,7 @@ __all__ = [
     "BufferLike",
     "as_view",
     "wipe_bytes",
+    "heap_copies",
     "scrub_heap_copies",
     "harden_process",
     "read_secret",
@@ -407,10 +408,11 @@ def wipe_bytes(obj: Any) -> bool:
     return False
 
 
-#: A secret shorter than this is not looked for by :func:`scrub_heap_copies`: so few bytes can turn up in the
-#: heap by chance, and zeroing them there would damage something that is in use.
+#: A secret shorter than this is not looked for in the heap: so few bytes turn up there by chance too often
+#: for the search to be worth its time.
 MIN_SCRUB_BYTES = 8
-_SCRUB_CHUNK = 256 * 1024
+#: Small enough to be locked under the classic 64 KiB RLIMIT_MEMLOCK: the chunk holds heap content.
+_SCRUB_CHUNK = 32 * 1024
 
 
 class _IOVec(ctypes.Structure):
@@ -429,46 +431,42 @@ def _heap_ranges() -> List[Tuple[int, int]]:
     return ranges
 
 
-def scrub_heap_copies(secret: BufferLike) -> int:
-    """Zero every other copy of *secret* in this process's heap. Linux only. Returns how many were zeroed.
+def _heap_search(secret: BufferLike, known: Optional[Set[int]]) -> Optional[Set[int]]:
+    """Where the exact bytes of *secret* are in ``[heap]``. With *known*, zero every place that is not in it.
 
-    A native library that is handed a secret may copy it into memory it later
-    frees without overwriting: pyca/cryptography does that with the password
-    given to Argon2id. On Linux such a copy sits in the ``[heap]`` mapping,
-    where nothing zeroes it. This reads that mapping, looks for the exact
-    bytes of *secret*, and overwrites each match with zeros. A match is a
-    complete copy, so nothing but a copy is written to, and *secret* itself,
-    which lives outside the heap, is left alone.
-
-    The heap is read and written through ``process_vm_readv`` and
-    ``process_vm_writev`` on this process: the kernel does the copying, so a
-    part of the heap that has gone away in the meantime is an error code, never
-    a fault. Best effort: 0 on other systems, for a secret shorter than
-    ``MIN_SCRUB_BYTES``, where those calls are not allowed, and whenever
-    anything else goes wrong.
+    Returns the addresses found, or None where this cannot look: not Linux, a
+    secret shorter than ``MIN_SCRUB_BYTES``, one that holds a zero byte or
+    cannot be pinned, no ``process_vm_readv``. The heap is read and written through
+    ``process_vm_readv`` and ``process_vm_writev`` on this process: the kernel
+    does the copying, so a part of the heap that has gone away in the
+    meantime is an error code, never a fault.
     """
     if not sys.platform.startswith("linux"):
-        return 0
-    anchor = None
-    zeroed = 0
+        return None
+    view = as_view(secret)
+    length = len(view)
+    libc = _get_libc()
+    if length < MIN_SCRUB_BYTES or view.readonly or libc is None:
+        return None
+    if 0 in view:
+        # A match is written over whole. Without a zero byte in it, it cannot reach across the size field that
+        # separates one heap block from the next, so it lies inside a single block.
+        return None
+    vector = [ctypes.c_int, ctypes.POINTER(_IOVec), ctypes.c_ulong, ctypes.POINTER(_IOVec), ctypes.c_ulong,
+              ctypes.c_ulong]
+    read, write, find = libc.process_vm_readv, libc.process_vm_writev, libc.memmem
+    read.restype = write.restype = ctypes.c_ssize_t
+    read.argtypes = write.argtypes = vector
+    find.restype = ctypes.c_void_p
+    find.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
+    pid = os.getpid()
+    zeros = ctypes.create_string_buffer(length)
+    found: Set[int] = set()
+    looked = False
+    anchor = (ctypes.c_char * length).from_buffer(view)
     try:
-        view = as_view(secret)
-        length = len(view)
-        libc = _get_libc()
-        if length < MIN_SCRUB_BYTES or view.readonly or libc is None:
-            return 0
-        anchor = (ctypes.c_char * length).from_buffer(view)
         own = ctypes.addressof(anchor)
-        vector = [ctypes.c_int, ctypes.POINTER(_IOVec), ctypes.c_ulong, ctypes.POINTER(_IOVec), ctypes.c_ulong,
-                  ctypes.c_ulong]
-        read, write, find = libc.process_vm_readv, libc.process_vm_writev, libc.memmem
-        read.restype = write.restype = ctypes.c_ssize_t
-        read.argtypes = write.argtypes = vector
-        find.restype = ctypes.c_void_p
-        find.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p, ctypes.c_size_t]
-        pid = os.getpid()
-        zeros = ctypes.create_string_buffer(length)
-        with SecureBuffer(_SCRUB_CHUNK + length) as scratch:  # it will hold whatever copy is found: wiped on exit
+        with SecureBuffer(_SCRUB_CHUNK + length) as scratch:  # it holds heap content, the copy included: wiped on exit
             window = (ctypes.c_char * len(scratch)).from_buffer(scratch.view())
             try:
                 base = ctypes.addressof(window)
@@ -478,6 +476,9 @@ def scrub_heap_copies(secret: BufferLike) -> int:
                         size = min(len(scratch), high - at)
                         local, remote = _IOVec(base, size), _IOVec(at, size)
                         got = read(pid, ctypes.byref(local), 1, ctypes.byref(remote), 1, 0)
+                        if got < 0 and not looked:
+                            return None  # the kernel refuses: nothing can be said about the heap
+                        looked = True
                         if got < length:
                             break
                         offset = 0
@@ -488,22 +489,59 @@ def scrub_heap_copies(secret: BufferLike) -> int:
                             offset = hit - base
                             target = at + offset
                             if target + length <= own or target >= own + length:
-                                source, there = _IOVec(ctypes.addressof(zeros), length), _IOVec(target, length)
-                                if write(pid, ctypes.byref(source), 1, ctypes.byref(there), 1, 0) == length:
-                                    zeroed += 1
+                                found.add(target)
+                                if known is not None and target not in known:
+                                    source, there = _IOVec(ctypes.addressof(zeros), length), _IOVec(target, length)
+                                    write(pid, ctypes.byref(source), 1, ctypes.byref(there), 1, 0)
                             offset += 1
-                        if got < size:
+                        if got < size or size < len(scratch):
                             break
                         at += got - (length - 1)  # overlap, so a copy across two reads is seen whole in the next
-                        if size < len(scratch):
-                            break
             finally:
                 del window
-    except Exception:  # best effort by contract: the caller's work is done, this only tidies after a library
-        return zeroed
     finally:
         del anchor
-    return zeroed
+    return found
+
+
+def heap_copies(secret: BufferLike) -> Optional[Set[int]]:
+    """The places in this process's heap that hold the bytes of *secret* now. Linux only; None where it cannot look.
+
+    Call it right before handing *secret* to a native library that may copy
+    it, and give the result to :func:`scrub_heap_copies` right after. Never
+    raises.
+    """
+    try:
+        return _heap_search(secret, None)
+    except Exception:  # best effort by contract
+        return None
+
+
+def scrub_heap_copies(secret: BufferLike, before: Optional[Set[int]]) -> int:
+    """Zero the copies of *secret* that appeared in the heap since *before* was taken. Returns how many.
+
+    A native library that is handed a secret may copy it into memory it later
+    frees without overwriting: pyca/cryptography does that with the password
+    given to Argon2id. On Linux such a copy sits in the ``[heap]`` mapping,
+    where nothing zeroes it.
+
+    The same bytes can be in the heap for other reasons, as live data: a
+    password that is also a word some library keeps, an entry being imported
+    that contains it. Those must never be written to. So the caller notes
+    where the bytes are before the library runs (:func:`heap_copies`), and
+    only a place that holds them afterwards and did not before is zeroed:
+    with nothing else running in between, that is the library's copy.
+
+    Best effort: 0 when *before* is None (it could not look), and whenever
+    anything goes wrong. Never raises.
+    """
+    if before is None:
+        return 0
+    try:
+        after = _heap_search(secret, before)
+    except Exception:  # best effort by contract: the caller's work is done, this only tidies after a library
+        return 0
+    return len(after - before) if after is not None else 0
 
 
 def harden_process() -> None:

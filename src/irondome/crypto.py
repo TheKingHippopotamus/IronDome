@@ -29,7 +29,7 @@ from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from irondome.errors import IronDomeError, VaultError
-from irondome.secmem import BufferLike, SecureBuffer, as_view, scrub_heap_copies, wipe_bytes
+from irondome.secmem import BufferLike, SecureBuffer, as_view, heap_copies, scrub_heap_copies, wipe_bytes
 
 __all__ = [
     "KEY_LEN",
@@ -169,14 +169,17 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
             lanes=params.lanes,
             memory_cost=params.memory_kib,
         )
-        kdf.derive_into(as_view(password), out.view())  # type: ignore[arg-type, unused-ignore]  # any buffer is accepted
+        # pyca/cryptography copies the password into memory it frees without overwriting. On Linux nothing
+        # zeroes that block: where the password's bytes are in the heap is noted before the derivation, and
+        # what holds them afterwards and did not before is zeroed (best effort; see secmem.scrub_heap_copies).
+        before = heap_copies(password)
+        try:
+            kdf.derive_into(as_view(password), out.view())  # type: ignore[arg-type, unused-ignore]  # any buffer
+        finally:
+            scrub_heap_copies(password, before)
     except BaseException:
         out.wipe()
         raise
-    finally:
-        # pyca/cryptography copies the password into memory it frees without overwriting. On Linux nothing
-        # zeroes that block, so the copy is looked for in the heap and zeroed here (best effort; see the function).
-        scrub_heap_copies(password)
     return out
 
 
@@ -188,8 +191,9 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
 def hkdf(ikm: BufferLike, info: bytes, salt: Optional[bytes] = None, length: int = KEY_LEN) -> SecureBuffer:
     """Derive a purpose-bound key. *info* is the purpose label and is mandatory.
 
-    pyca/cryptography leaves a copy of the derived key behind: in its own
-    frames on the C stack and in memory it frees without overwriting. So the
+    pyca/cryptography leaves its working keys behind, the intermediate key
+    it extracts and the key it derives: in its own frames on the C stack and
+    in memory it frees without overwriting. So the
     derivation is run a second time from this same frame, with an all-zero
     key of the same length and the same label, salt and output length. The
     second run takes the same path through the same code, puts its working
