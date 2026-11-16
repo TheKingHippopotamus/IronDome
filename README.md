@@ -213,10 +213,12 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   on purpose gets it through, as does an encoding that is not on the list;
   a `--reveal` grant or an entry marked `--agent reveal` lets an agent see
   the value. `irondome run` reads `.env.irondome` in the directory it runs
-  in without being asked and lists what the file supplies, with `-q` too;
-  variables that choose what code runs (`PATH`, `LD_PRELOAD` and their
-  like) it takes only from a file you name with `--env-file`. In a
-  directory someone else wrote, read that file first.
+  in without being asked and lists what the file supplies, with `-q` too.
+  Such a file may only point variables at entries of the vault; one that
+  sets anything as written (`PATH`, `LD_PRELOAD`, or just `DEBUG=1`) is
+  refused until you name it with `--env-file`. In a directory someone
+  else wrote, read that file first: it still decides which of your
+  secrets the command receives.
 * **Grant and session tokens are bearer secrets.** Whoever holds one, and can
   read its file, has what it grants; a session token in an agent's
   environment is full access while the session lasts: it unwraps the vault

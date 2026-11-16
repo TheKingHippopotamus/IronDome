@@ -177,10 +177,10 @@ def test_run_says_what_an_env_file_it_was_not_given_supplies(cli: CLI, tmp_path)
     init(cli, "--no-recovery")
     add(cli, "stripe", "the-stripe-value-1")
     (tmp_path / "repo").mkdir()
-    (tmp_path / "repo" / ".env.irondome").write_text("STRIPE_KEY=irondome://stripe\nLOG_LEVEL=debug\n")
+    (tmp_path / "repo" / ".env.irondome").write_text("STRIPE_KEY=irondome://stripe\nOTHER_KEY=irondome://stripe\n")
     ran = ok(cli("run", "--cwd", str(tmp_path / "repo"), "--password-stdin", "--", "/usr/bin/true",
                  stdin=PASSWORD + "\n"))
-    assert "found in the working directory (from the vault: STRIPE_KEY; set as written: LOG_LEVEL)" in ran.stderr
+    assert "found in the working directory (from the vault: OTHER_KEY, STRIPE_KEY)" in ran.stderr
     named = ok(cli("run", "--env-file", str(tmp_path / "repo" / ".env.irondome"), "--password-stdin", "--",
                    "/usr/bin/true", stdin=PASSWORD + "\n"))
     assert "found in the working directory" not in named.stderr

@@ -1098,6 +1098,13 @@ def _read_value(
     if source == "--words":
         bits = generator.passphrase_entropy_bits(args.words)
         return generator.generate_passphrase(args.words), f"a {args.words}-word passphrase ({bits:.0f} bits)"
+    if source == "--value-stdin" and os.isatty(0):
+        # Typed, not piped: a line read from the terminal would be echoed, so it is asked for as any typed value.
+        ctx.out.info(
+            "stdin is this terminal, so the value is typed at a hidden prompt, one line. For a value of several "
+            f"lines, pipe it in: irondome {args.command} {_safe(name)} --value-stdin < FILE"
+        )
+        return _prompt_text(ctx, f"Value for {_safe(name)}: ", "the value", "--value-stdin"), None
     if source == "--value-stdin":
         return _stdin_value(args), None
     return _prompt_text(ctx, f"Value for {_safe(name)}: ", "the value", "--value-stdin"), None
@@ -1109,13 +1116,12 @@ def _stdin_value(args: argparse.Namespace) -> str:
     A private key or a certificate is several lines, and a command that kept the first and said ``ok``
     would lose the rest without a word. So when the value is the last thing stdin holds for this command
     (no ``--totp-stdin``, no ``--field``, no ``--note-stdin``) it is everything up to the end of input: a
-    single line without its line break, several lines exactly as they came. When something follows, each
-    item is one line; a value of several lines then needs its own command. At a terminal a value is one
-    line, ended with Enter.
+    single line without the line breaks after it, several lines exactly as they came. When something
+    follows, each item is one line; a value of several lines then needs its own command. (At a terminal
+    the value is typed at a hidden prompt instead: see :func:`_read_value`.)
     """
     what = "the value"
-    more_follows = args.totp_stdin or args.field or args.note_stdin
-    if more_follows or os.isatty(0):
+    if args.totp_stdin or args.field or args.note_stdin:
         return _stdin_text(what)
     data = _stdin_bytes(what, _VALUE_LIMIT_BYTES)
     try:
@@ -1127,7 +1133,7 @@ def _stdin_value(args: argparse.Namespace) -> str:
             raise UsageError(f"{what} is not valid UTF-8 text") from None
     finally:
         wipe_bytes(data)
-    body = text[:-2] if text.endswith("\r\n") else text[:-1] if text.endswith("\n") else text
+    body = text.rstrip("\r\n")  # `echo token`, or a file whose last lines are blank: still one line
     return text if "\n" in body else body
 
 
@@ -2700,8 +2706,8 @@ def _add_value_options(parser: argparse.ArgumentParser, *, editing: bool) -> Non
     group.add_argument("--words", type=int, metavar="N", help="generate a passphrase of N words instead")
     group.add_argument(
         "--value-stdin", action="store_true",
-        help="read the value from stdin: all of it, several lines included, unless --totp-stdin, --field or "
-        "--note-stdin follow (then it is one line)",
+        help="read the value from stdin: piped in and last there, all of it, several lines included; one line "
+        "when --totp-stdin, --field or --note-stdin follow; typed at a hidden prompt when stdin is a terminal",
     )
     if editing:
         group.add_argument("--prompt-value", action="store_true", help="type the new value at a hidden prompt")

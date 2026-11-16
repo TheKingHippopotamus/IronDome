@@ -60,13 +60,6 @@ _APPROVAL_LABEL = "approved with Touch ID"
 _AGENT_ALLOWED = ("use", "reveal")
 _AUDIT_COUNT = 50
 _ENV_FILE_NAME = ".env.irondome"
-#: Variables that decide what code a command runs: where programs and libraries are looked up, and what a shell
-#: or an interpreter loads before the program it was asked for. A file nobody named may not set them.
-_CODE_CHOOSING = re.compile(
-    r"PATH|CDPATH|IFS|ENV|HOME|ZDOTDIR|XDG_CONFIG_HOME|BASH_ENV|BASH_FUNC_.*|BASHOPTS|SHELLOPTS|PS4|PROMPT_COMMAND"
-    r"|LD_.*|DYLD_.*|PYTHON.*|NODE_OPTIONS|NODE_PATH|PERL5.*|PERLLIB|RUBYOPT|RUBYLIB|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS"
-    r"|GIT_SSH|GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_ASKPASS|GIT_PROXY_COMMAND|GIT_EXTERNAL_DIFF|GIT_PAGER|GIT_CONFIG.*"
-)
 _ENV_FILE_LIMIT = 1024 * 1024
 _ID = re.compile(r"[0-9a-f]{32}")
 _ID_PREFIX = re.compile(r"[0-9a-fA-F]{6,32}")
@@ -374,21 +367,19 @@ def _env_file(ctx: Context, named: Optional[str], cwd: Optional[str]) -> Optiona
     # someone else put in the directory cannot quietly decide what the command receives.
     secret = sorted(name for name, value in values.items() if refs.is_reference(value))
     plain = sorted(name for name in values if name not in secret)
-    choosing = sorted(name for name in values if _CODE_CHOOSING.fullmatch(name))
-    if choosing:
+    if plain:
+        # A list of the variables that choose what code runs (PATH, LD_PRELOAD, LESSOPEN, MAKEFILES, ...) can
+        # never be complete, so there is none: a file nobody named may name entries of the vault and nothing else.
         shown = scan.display_path(path)
         raise UsageError(
-            f"{shown} was found in the working directory and sets {_listed(choosing)}, which "
-            f"{'decides' if len(choosing) == 1 else 'decide'} what code the command runs. IronDome takes such "
-            f"variables only from a file you name. Read the file; if it is yours, run with: --env-file {shown}"
+            f"{shown} was found in the working directory and sets {_listed(plain)} as written. A file nobody "
+            "named may only point variables at entries of the vault (NAME=irondome://ENTRY): a variable set as "
+            "written can change what the command runs. Read the file; if it is yours, run with: "
+            f"--env-file {shown}"
         )
-    parts = []
-    if secret:
-        parts.append(f"from the vault: {_listed(secret)}")
-    if plain:
-        parts.append(f"set as written: {_listed(plain)}")
     # Said even with -q: this is the one notice of what a file nobody named puts into the command.
-    ctx.out.notice(f"using {scan.display_path(path)}, found in the working directory ({'; '.join(parts) or 'empty'})")
+    supplied = f"from the vault: {_listed(secret)}" if secret else "empty"
+    ctx.out.notice(f"using {scan.display_path(path)}, found in the working directory ({supplied})")
     return values
 
 
@@ -600,9 +591,21 @@ def _grant_create(ctx: Context, args: argparse.Namespace) -> int:
     with _open_to_outlast(ctx, f"create a grant for {_spoken_list(references)}", ttl) as vault:
         covers = [_source(vault, reference)[2] for reference in references]
         label = args.label or ""
+        if caps.SESSION_MARK.search(label):
+            raise UsageError(
+                "a label cannot end with [session ...]: that is how IronDome marks a grant made under a session, "
+                "and ending that session would revoke this grant with it"
+            )
         if ctx.unlocked_by == "session":
             # Marked as this session's: ending the session (irondome lock) revokes it too.
-            label = f"{label} {caps.session_mark(os.environ.get(ENV_SESSION, '').strip())}".strip()
+            mark = caps.session_mark(os.environ.get(ENV_SESSION, "").strip())
+            room = caps.MAX_LABEL - len(mark) - 1
+            if len(label) > room:
+                raise UsageError(
+                    f"under a session a label is at most {room} characters: the grant is also marked {mark}, so "
+                    "that ending the session revokes it"
+                )
+            label = f"{label} {mark}".strip()
         token, info = caps.create_grant(
             vault, references, mode=mode, ttl=ttl, uses=uses, label=label,
             actor="session" if ctx.unlocked_by == "session" else "owner",
@@ -828,7 +831,7 @@ def _lock(ctx: Context, args: argparse.Namespace) -> int:
         if args.all:
             ended = caps.end_sessions(vault=vault)
         elif token is not None:
-            ended = caps.end_sessions(token, vault=vault)
+            ended = caps.end_sessions(token, vault=vault, actor="session")  # the token is all that was shown
     except audit.AuditError as exc:
         ended = max(ended, 1)
         ctx.out.warn(str(exc))

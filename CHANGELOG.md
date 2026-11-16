@@ -132,8 +132,10 @@ lockout. What that pass found, and what was done:
   another bunker's grant for a failure. The check accepts that refusal, and
   the suite now runs every self-check on the software TPM.
 - **`--value-stdin` kept the first line of a key of several lines and said
-  `ok`.** A value that is the last thing on stdin is now read to the end of
-  input, up to 64 KiB, and stored exactly as it came.
+  `ok`.** A value that is piped in and is the last thing on stdin is now
+  read to the end of input, up to 64 KiB: several lines exactly as they
+  came, one line without the line breaks after it. With stdin a terminal
+  the value is typed at a hidden prompt.
 - **Masking still passed ordinary encodings**: bash's `printf %q`, JSON as
   Go and PHP write it, CSV quoting, a value percent-encoded twice, hex with
   a separator between the bytes. These are masked now; the claim lists what
@@ -144,16 +146,20 @@ lockout. What that pass found, and what was done:
 - **While a re-key was unfinished, `audit --verify` said ALTERED.** It now
   says the log cannot be checked until the re-key is finished, and how.
 - **`.env.irondome` could set `PATH`, and `-q` hid the notice about the
-  file.** The notice is printed with `-q` too, and variables that choose
-  what code runs are taken only from a file named with `--env-file`.
+  file.** The notice is printed with `-q` too. A file nobody named may now
+  only point variables at entries of the vault; one that sets anything as
+  written is refused until it is named with `--env-file`. (A first fix
+  refused a list of dangerous names; the reviewer got a secret out through
+  `LESSOPEN`, which was not on it.)
 - **A grant made under a session outlived `irondome lock`.** Ending a
-  session now revokes the grants made under it.
+  session now revokes the grants made under it, and a label may not
+  imitate the mark that ties a grant to its session.
 - **A session used without a terminal was logged as `agent`.** It is logged
   as `session`, as the texts said.
 - **A memory cost the machine could not give ended in a traceback.** It is
   an error in one line.
-- `passwd`, `recovery use` and `rekey` remark on a weak new master password
-  as `init` does; every unlock says when other users can reach the bunker's
+- `passwd` and `recovery use` remark on a weak new master password as
+  `init` does; every unlock says when other users can reach the bunker's
   files; `clipboard_clear_seconds` takes `45s`; a file-size limit is named
   as one.
 - Stated, not changed: session and grant files and the audit log show
@@ -161,6 +167,10 @@ lockout. What that pass found, and what was done:
   server keeps the values it used in memory while it runs; `recovery use`
   does not revoke grants; a scripted `init` writes the recovery key to
   stdout.
+
+The same reviewer then checked that build by hand: every item above held,
+and four smaller faults in the fixes themselves were found and are fixed
+in the entries above.
 
 ### Added
 

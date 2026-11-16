@@ -164,10 +164,11 @@ resets the counter at once, for you and for anyone else who can use the TPM:
 
 **`.env.irondome` is read without asking.** `irondome run` takes it from the
 directory the command runs in and says which variables it found there, with
-`-q` as well. From a file nobody named it refuses the variables that choose
-what code runs (`PATH`, `LD_PRELOAD`, `BASH_ENV`, `PYTHONPATH` and their
-like) until you name the file with `--env-file`; that list cannot be
-complete. The
+`-q` as well. A file nobody named may only point variables at entries of
+the vault (`NAME=irondome://ENTRY`). If it sets anything as written, the
+command is refused until you name the file with `--env-file`: a variable
+set as written can choose what code runs (`PATH`, `LD_PRELOAD`, `LESSOPEN`,
+`MAKEFILES` and many more), and no list of those is complete. The
 file names what the command receives, so in a directory someone else wrote (a
 cloned repository), read it before you run anything through `irondome run`
 with your master password or a session; a grant gives the command only what
@@ -299,7 +300,9 @@ with the old key and shows what it held then.
   copy of the vault as it was being written. The next write to the vault
   removes such files: a re-key, a keyslot change, or any entry added or
   changed. Until then one left by a killed re-key opens with the recovery
-  key that re-key had printed.
+  key that re-key had printed. Any file with a name of that shape in the
+  bunker's directory or its `backups/` is taken for one: keep nothing of
+  your own there.
 * **The TPM index that binds sessions and grants has an empty authorisation**
   and is exempt from dictionary-attack lockout, so that a lockout cannot stop
   every grant. Any account allowed to use the TPM can read it; it is useless

@@ -2080,6 +2080,23 @@ def test_init_at_a_terminal_offers_the_modes_where_touch_id_works(
     assert touch.prompts()[0]["operation"] == "enroll"
 
 
+def test_value_stdin_at_a_terminal_is_a_hidden_prompt_and_says_how_to_pipe_a_longer_value(
+    cli: Run, vault: str, terminal: Callable[..., Terminal]
+) -> None:
+    """A person typed ``add k --value-stdin`` at a terminal: no prompt came, and what they typed was echoed.
+
+    stdin is the terminal there, so the value is asked for as any typed value is: hidden, one line.
+    """
+    session = terminal("add", "typed", "--kind", "secret", "--value-stdin")
+    session.secret("Master password: ", PASSWORD)
+    session.expect("stdin is this terminal, so the value is typed at a hidden prompt, one line")
+    session.expect("irondome add typed --value-stdin < FILE")
+    session.secret("Value for typed: ", "typed-at-the-terminal-1")
+    assert session.finish() == 0, session.output
+    assert "typed-at-the-terminal-1" not in session.output
+    assert get(cli, "typed") == "typed-at-the-terminal-1"
+
+
 @needs_line_prompts
 def test_the_password_prompt_says_on_the_terminal_what_typing_the_password_will_do(
     cli: Run, vault: str, terminal: Callable[..., Terminal]

@@ -279,8 +279,8 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
         password inside HTTP Basic credentials, ``echo "$TOKEN" | base64``
         with its trailing newline);
     ``hex``
-        lower and upper case, run together or with ``:`` or a space between
-        the bytes;
+        lower and upper case, run together or with ``:``, ``-`` or a space
+        between the bytes;
     ``percent``
         RFC 3986 escaping of everything but letters, digits and ``-._~``; the
         same with a space written as ``+`` (HTML forms); and the variants
@@ -344,7 +344,7 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
             forms += [(label, core) for core in _embedded_base64(raw, altchars)]
         digits = raw.hex().encode("ascii")
         forms += [("hex", digits), ("hex", digits.upper())]
-        for separator in (":", " "):  # a fingerprint-style dump: 6b:65:79 or 6B 65 79
+        for separator in (":", " ", "-"):  # a fingerprint-style dump: 6b:65:79, 6B 65 79 or 6b-65-79
             spaced = raw.hex(separator).encode("ascii")
             forms += [("hex", spaced), ("hex", spaced.upper())]
         percent = _percent_forms(raw)

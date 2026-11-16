@@ -164,6 +164,8 @@ __all__ = [
     "TOKEN_PATTERN",
     "session_expires",
     "session_mark",
+    "SESSION_MARK",
+    "MAX_LABEL",
     "SESSION_TTL_MIN",
     "SESSION_TTL_MAX",
     "GRANT_TTL_MIN",
@@ -246,7 +248,7 @@ _TOTP_KEYS = frozenset(("entry", "field", "period", "digits", "codes"))
 _TOTP_FIELD = "totp"
 
 _PAD_BLOCK = 256
-_MAX_LABEL = 200
+_MAX_LABEL = 200  # also MAX_LABEL, below
 _MAX_REFERENCE = 512
 _MAX_ENTRY_NAME = 200
 _MAX_FIELD_NAME = 64
@@ -1707,7 +1709,9 @@ def list_caps() -> List[CapInfo]:
     return sorted(found, key=lambda info: (info.created, info.id))
 
 
-def _note_removed(vault: Optional["Vault"], removed: List[Tuple[str, str]], summary: str) -> None:
+def _note_removed(
+    vault: Optional["Vault"], removed: List[Tuple[str, str]], summary: str, *, actor: str = _OWNER
+) -> None:
     """Record removals for the owner, after they are done, when a vault was passed.
 
     A removal is never undone or held up by the log. If it cannot be recorded
@@ -1719,10 +1723,16 @@ def _note_removed(vault: Optional["Vault"], removed: List[Tuple[str, str]], summ
         with audit.owner_key(vault) as owner:
             for action, cap_id in removed:
                 audit.record(
-                    owner, vault_id=vault.vault_id, kid=audit.KID_VAULT, action=action, actor=_OWNER, target=cap_id
+                    owner, vault_id=vault.vault_id, kid=audit.KID_VAULT, action=action, actor=actor, target=cap_id
                 )
     except audit.AuditError as exc:
         raise audit.AuditError(f"{summary}, but that could not be recorded: {exc}") from None
+
+
+#: The end of the label of a grant made under a session (see :func:`session_mark`).
+SESSION_MARK = re.compile(r"\[session [^\]]*\]\s*$")
+#: The longest label a session or grant may carry.
+MAX_LABEL = 200
 
 
 def session_mark(token: str) -> str:
@@ -1739,7 +1749,7 @@ def session_mark(token: str) -> str:
     return f"[session {cap_id[:12]}]"
 
 
-def end_sessions(token: Optional[str] = None, *, vault: Optional["Vault"] = None) -> int:
+def end_sessions(token: Optional[str] = None, *, vault: Optional["Vault"] = None, actor: str = _OWNER) -> int:
     """Destroy the session *token* names, or every session when there is no token.
 
     Returns how many were destroyed (0 if the token's session is already
@@ -1747,7 +1757,8 @@ def end_sessions(token: Optional[str] = None, *, vault: Optional["Vault"] = None
     is always allowed. The grants made under a session that ends here (their
     label ends with its :func:`session_mark`) are revoked with it. Pass
     *vault* to have each one recorded in the audit log as ``session.end``
-    and ``grant.revoke``.
+    and ``grant.revoke``, done by *actor*: the owner, or ``"session"`` when
+    the session's own token is all that asked.
     """
     ended: List[str] = []
     revoked: List[str] = []
@@ -1769,7 +1780,7 @@ def end_sessions(token: Optional[str] = None, *, vault: Optional["Vault"] = None
             if os.path.lexists(str(path)) and (header is None or header.kind == KIND_SESSION):
                 _destroy(path)
                 ended.append(cap_id)
-        marks = tuple(f"[session {ended_id[:12]}]" for ended_id in ended)
+        marks = tuple(f"[session {ended_id[:12]}]" for ended_id in ended)  # as session_mark() writes them
         if marks:
             for found_id, path in _capability_files():
                 header = _load_quietly(path, found_id)
@@ -1780,6 +1791,7 @@ def end_sessions(token: Optional[str] = None, *, vault: Optional["Vault"] = None
         vault,
         [("session.end", ended_id) for ended_id in ended] + [("grant.revoke", grant_id) for grant_id in revoked],
         _plural(len(ended), "session ended", "sessions ended"),
+        actor=actor,
     )
     return len(ended)
 

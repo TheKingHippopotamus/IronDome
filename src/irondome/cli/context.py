@@ -367,7 +367,7 @@ class Context:
         """A remark, never a refusal, when a new master password is one a guessing program finds early.
 
         Made wherever a new master password is taken (``init``, ``bunker create``, ``passwd``, ``recovery
-        use``, ``rekey``), so that none of them accepts ``password`` without a word.
+        use``), so that none of them accepts ``password`` without a word.
         """
         strength = estimate_strength(password)
         if strength.label in _WEAK_LABELS:

@@ -1996,7 +1996,7 @@ def test_patterns_cover_the_other_json_csv_percent_and_hex_writers() -> None:
     once = urllib.parse.quote(value, safe="")
     assert urllib.parse.quote(once, safe="").encode() in patterns  # a URL inside a URL
     assert lower_escapes(once).replace(b"%", b"%25") in patterns
-    for separator in (":", " "):
+    for separator in (":", " ", "-"):
         assert raw.hex(separator).encode() in patterns and raw.hex(separator).upper().encode() in patterns
     masker = runner.Masker({"S": value})
     shown = masker.feed(b'{"k":"p@ss/w0rd+x\\u0026y=1\\u003cz\\u003e\\"q\\" ~end"}\n') + masker.flush()

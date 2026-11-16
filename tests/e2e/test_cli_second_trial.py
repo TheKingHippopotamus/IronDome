@@ -60,6 +60,9 @@ def test_a_value_of_one_line_is_stored_without_its_line_break(cli: CLI) -> None:
     for name, typed in (("unix", "one-line-value\n"), ("dos", "one-line-value\r\n"), ("bare", "one-line-value")):
         ok(cli("add", name, "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\n" + typed))
         assert value_of(cli, name) == "one-line-value"
+    ok(cli("add", "blanks", "--kind", "secret", "--password-stdin", "--value-stdin",
+           stdin=PASSWORD + "\ntok_blank\n\n\n"))  # a here-document or a file whose last lines are blank
+    assert value_of(cli, "blanks") == "tok_blank"
     ok(cli("add", "empty", "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\n\n"))
     nothing = cli("add", "none", "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\n")
     assert nothing.returncode != 0 and "expected the value on stdin, and found nothing" in nothing.stderr
@@ -108,9 +111,24 @@ def test_ending_a_session_revokes_the_grants_made_under_it(cli: CLI) -> None:
     assert gone.returncode != 0 and "opens nothing here" in gone.stderr
     ok(cli("run", "--env", "S=stripe", "--", "/usr/bin/true", env={"IRONDOME_GRANT": owners}))  # the owner's stays
     events = document(cli("audit", "-n", "0", "--json", "--password-stdin", stdin=PASSWORD + "\n"))["events"]
-    assert [event["action"] for event in events if event["action"] in ("session.end", "grant.revoke")] == [
-        "session.end", "grant.revoke",
+    assert [(event["action"], event["actor"]) for event in events
+            if event["action"] in ("session.end", "grant.revoke")] == [
+        ("session.end", "session"), ("grant.revoke", "session"),  # the session's token is all that asked
     ]
+
+
+def test_a_label_cannot_imitate_the_mark_of_a_session(cli: CLI) -> None:
+    """An owner's grant labelled like a session's was revoked when that session was locked."""
+    init(cli, "--no-recovery")
+    add(cli, "stripe", "the-stripe-value-1")
+    refused = fails(cli("grant", "create", "stripe", "--label", "mine [session 0123456789ab]", "--password-stdin",
+                        stdin=PASSWORD + "\n"), 2)
+    assert "a label cannot end with [session ...]" in refused.stderr
+    env = with_session(cli, "--ttl", "10m")
+    long_label = fails(cli("grant", "create", "stripe", "--ttl", "2m", "--label", "x" * 180, "--password-stdin",
+                           stdin="\n", env=env), 2)
+    assert "under a session a label is at most 177 characters" in long_label.stderr
+    ok(cli("grant", "create", "stripe", "--ttl", "2m", "--label", "x" * 177, "--password-stdin", stdin="\n", env=env))
 
 
 def test_a_session_used_without_a_terminal_is_recorded_as_a_session(cli: CLI) -> None:
@@ -137,8 +155,13 @@ def test_the_notice_about_a_found_env_file_is_printed_with_quiet_too(cli: CLI, t
     assert "found in the working directory (from the vault: STRIPE_KEY)" in ran.stderr
 
 
-def test_a_found_env_file_may_not_choose_what_code_runs(cli: CLI, tmp_path) -> None:
-    """A planted file set PATH, and ``irondome run -- make`` ran the planted ``make`` with the secret."""
+def test_a_found_env_file_may_only_name_entries_of_the_vault(cli: CLI, tmp_path) -> None:
+    """A planted file set PATH, and ``irondome run -- make`` ran the planted ``make`` with the secret.
+
+    A first fix refused a list of such variables. The reviewer then got the secret out through LESSOPEN,
+    which was not on it, and named thirty more. No list of them is complete, so there is none: a file
+    nobody named may point variables at entries of the vault, and set nothing as written.
+    """
     init(cli, "--no-recovery")
     add(cli, "stripe", "the-stripe-value-1")
     repo = tmp_path / "repo"
@@ -146,15 +169,20 @@ def test_a_found_env_file_may_not_choose_what_code_runs(cli: CLI, tmp_path) -> N
     marker = tmp_path / "planted-ran"
     (repo / "bin" / "make").write_text(f"#!/bin/sh\necho ran > '{marker}'\n")
     (repo / "bin" / "make").chmod(0o755)
-    (repo / ".env.irondome").write_text(
-        f"STRIPE_KEY=irondome://stripe\nPATH={repo}/bin:/usr/bin:/bin\nLD_PRELOAD=/tmp/x.so\n"
-    )
-    refused = fails(cli("run", "--cwd", str(repo), "--password-stdin", "--", "make", stdin=PASSWORD + "\n"), 2)
-    assert "sets LD_PRELOAD, PATH, which decide what code the command runs" in refused.stderr
-    assert "--env-file" in refused.stderr and not marker.exists()
-    named = ok(cli("run", "--cwd", str(repo), "--env-file", str(repo / ".env.irondome"), "--password-stdin", "--",
-                   "make", stdin=PASSWORD + "\n"))  # a file the owner names is the owner's choice
-    assert marker.exists() and "found in the working directory" not in named.stderr
+    for planted, named in (
+        (f"PATH={repo}/bin:/usr/bin:/bin\nLD_PRELOAD=/tmp/x.so", "LD_PRELOAD, PATH"),
+        ("LESSOPEN=|/tmp/repo/h.sh %s", "LESSOPEN"),
+        ("LOG_LEVEL=debug", "LOG_LEVEL"),  # harmless, and refused all the same: the rule has no list
+    ):
+        (repo / ".env.irondome").write_text(f"STRIPE_KEY=irondome://stripe\n{planted}\n")
+        refused = fails(cli("run", "--cwd", str(repo), "--password-stdin", "--", "make", stdin=PASSWORD + "\n"), 2)
+        assert f"sets {named} as written" in refused.stderr
+        assert "may only point variables at entries of the vault" in refused.stderr
+        assert "--env-file" in refused.stderr and not marker.exists()
+    (repo / ".env.irondome").write_text(f"STRIPE_KEY=irondome://stripe\nPATH={repo}/bin:/usr/bin:/bin\n")
+    named_file = ok(cli("run", "--cwd", str(repo), "--env-file", str(repo / ".env.irondome"), "--password-stdin",
+                        "--", "make", stdin=PASSWORD + "\n"))  # a file the owner names is the owner's choice
+    assert marker.exists() and "found in the working directory" not in named_file.stderr
 
 
 # -- remarks that were missing ------------------------------------------------------------------
