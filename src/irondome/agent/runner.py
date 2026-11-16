@@ -69,6 +69,7 @@ from irondome.errors import IronDomeError, UsageError
 
 __all__ = [
     "MIN_MASK_BYTES",
+    "MIN_LINE_BYTES",
     "MIN_ENCODED_BYTES",
     "CommandNotFoundError",
     "CommandNotExecutableError",
@@ -157,12 +158,64 @@ class RunResult:
 # What a secret looks like in a stream
 # ---------------------------------------------------------------------------
 
+#: From this length on, each line of a value of several lines is masked by itself as well.
+MIN_LINE_BYTES = 20
+
 _UNRESERVED = frozenset(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 _COMPONENT = _UNRESERVED | frozenset(b"!*'()")
+#: What the common percent-encoders leave alone: RFC 3986's unreserved set (Python's ``quote(value, safe="")``),
+#: JavaScript's ``encodeURIComponent``, Python's ``quote`` as called without arguments, JavaScript's ``encodeURI``.
+_PERCENT_KEEPS = (
+    _UNRESERVED,
+    _COMPONENT,
+    _UNRESERVED | frozenset(b"/"),
+    _COMPONENT | frozenset(b";,/?:@&=+$#"),
+)
+#: What HTML form encoding leaves alone where it differs from the above: ``*`` is kept and ``~`` is escaped
+#: (``URLSearchParams``, Java's ``URLEncoder``, PHP's ``urlencode``), with a space written as ``+``.
+_FORM_KEEP = (_UNRESERVED - frozenset(b"~")) | frozenset(b"*")
 
 
-def _percent(raw: bytes, keep: FrozenSet[int], space: bytes) -> bytes:
-    return b"".join(space if byte == 0x20 else bytes((byte,)) if byte in keep else b"%%%02X" % byte for byte in raw)
+def _percent(raw: bytes, keep: FrozenSet[int], space: bytes, *, lower: bool = False) -> bytes:
+    escape = b"%%%02x" if lower else b"%%%02X"
+    return b"".join(space if byte == 0x20 else bytes((byte,)) if byte in keep else escape % byte for byte in raw)
+
+
+def _percent_forms(raw: bytes) -> List[bytes]:
+    """*raw* as the common percent-encoders write it, with upper- and lower-case escapes."""
+    forms = []
+    for lower in (False, True):
+        for keep in _PERCENT_KEEPS:
+            forms.append(_percent(raw, keep, b"%20", lower=lower))
+        forms.append(_percent(raw, _UNRESERVED, b"+", lower=lower))
+        forms.append(_percent(raw, _FORM_KEEP, b"+", lower=lower))
+    return forms
+
+
+def _html_forms(value: str) -> List[bytes]:
+    """*value* as HTML and XML escape text: ``&``, ``<`` and ``>`` always, and the quotes left alone or
+    written as the libraries in common use write them (``&quot;`` or ``&#34;``; ``&#x27;``, ``&#39;``,
+    ``&#039;`` or ``&apos;``)."""
+    body = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    forms = [body]
+    for double in ("&quot;", "&#34;"):
+        quoted = body.replace('"', double)
+        forms.append(quoted)
+        forms += [quoted.replace("'", single) for single in ("&#x27;", "&#39;", "&#039;", "&apos;")]
+    return [text.encode("utf-8") for text in forms]
+
+
+def _is_secret_line(line: bytes) -> bool:
+    """Whether one line of a value of several lines is masked by itself.
+
+    Long enough to be told apart, and one unbroken token: the lines of a private key or a certificate are,
+    and a line with spaces in it (``"type": "service_account",``, ``- name: admin``) is ordinary text that
+    other output holds too. The lines that open and close a PEM block say what the block is and are the same
+    in every key: masking them would blank them in output that has nothing to do with this value.
+    """
+    if len(line) < MIN_LINE_BYTES or line.startswith(b"-----") or line.endswith(b"-----"):
+        return False
+    return not any(byte in b" \t" for byte in line)
 
 
 def _embedded_base64(raw: bytes, altchars: Optional[bytes]) -> List[bytes]:
@@ -201,11 +254,19 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
         lower and upper case;
     ``percent``
         RFC 3986 escaping of everything but letters, digits and ``-._~``; the
-        same with a space written as ``+`` (HTML forms); and the variant that
-        also leaves ``!*'()`` alone (JavaScript's ``encodeURIComponent``);
+        same with a space written as ``+`` (HTML forms); and the variants
+        that also leave alone ``!*'()`` (JavaScript's ``encodeURIComponent``),
+        ``/`` (Python's ``urllib.parse.quote`` as called without arguments)
+        or the characters that structure a URL (JavaScript's ``encodeURI``);
+        each with upper- and with lower-case hex digits;
+    ``html``
+        ``&``, ``<`` and ``>`` written as entities, with the quotes left
+        alone or written ``&quot;`` and ``&#x27;``, ``&#39;`` or ``&apos;``;
     ``json``
         the body of the JSON string, as ``json.dumps`` and ``JSON.stringify``
         write it, with non-ASCII characters both literal and as ``\\uXXXX``;
+        and the same escaped once more, as it is inside a JSON document that
+        is itself carried as a string;
     ``shell``
         the value as a shell quotes it: between double quotes with a
         backslash before each backslash, double quote, ``$`` and backtick
@@ -216,7 +277,14 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
         the value as a debugger prints a string: backslashes doubled and
         control characters escaped, with and without a backslash before
         ``'`` (Python's ``repr``, Node's ``console.log`` of an object, Perl's
-        ``Data::Dumper``).
+        ``Data::Dumper``);
+    ``line``
+        for a value of several lines, each line of :data:`MIN_LINE_BYTES` or
+        more by itself, without the white space around it: what is left of
+        the value when a logger puts a time or a name in front of every line.
+        Only a line that is one unbroken token counts (the body of a key or a
+        certificate); a line with spaces in it, and the lines that open and
+        close a PEM block, are ordinary text and are left alone.
 
     Duplicates are dropped: a value made only of letters and digits is its
     own percent, JSON, shell and repr form. A value shorter than
@@ -239,13 +307,16 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
             forms += [(label, core) for core in _embedded_base64(raw, altchars)]
         digits = raw.hex().encode("ascii")
         forms += [("hex", digits), ("hex", digits.upper())]
-        forms += [
-            ("percent", _percent(raw, _UNRESERVED, b"%20")),
-            ("percent", _percent(raw, _UNRESERVED, b"+")),
-            ("percent", _percent(raw, _COMPONENT, b"%20")),
-        ]
+        forms += [("percent", form) for form in _percent_forms(raw)]
+        forms += [("html", form) for form in _html_forms(value)]
         escaped = json.dumps(value, ensure_ascii=False)[1:-1]
         forms += [("json", escaped.encode("utf-8")), ("json", json.dumps(value)[1:-1].encode("ascii"))]
+        # A JSON document carried as a string inside another one: every backslash and quote escaped once more.
+        forms += [
+            ("json", json.dumps(escaped, ensure_ascii=False)[1:-1].encode("utf-8")),
+            ("json", json.dumps(json.dumps(value)[1:-1])[1:-1].encode("ascii")),
+            ("json", json.dumps(escaped)[1:-1].encode("ascii")),  # literal inside, \\u escapes outside
+        ]
         forms += [
             ("shell", "".join("\\" + char if char in '\\"$`' else char for char in value).encode("utf-8")),
             ("shell", value.replace("'", "'\\''").encode("utf-8")),
@@ -254,6 +325,11 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
         # In a JSON string a double quote is always written as backslash-quote; a debugger leaves it alone.
         plain_quotes = escaped.replace('\\"', '"')
         forms += [("repr", plain_quotes.encode("utf-8")), ("repr", plain_quotes.replace("'", "\\'").encode("utf-8"))]
+        # A value of several lines (a private key, a certificate) that a logger prints with something in
+        # front of every line never appears whole: each line long enough to be told apart is a pattern too.
+        lines = [line.strip() for line in raw.splitlines()]
+        if len(lines) > 1:
+            forms += [("line", line) for line in lines if _is_secret_line(line)]
     seen: Set[bytes] = set()
     unique: List[Tuple[str, bytes]] = []
     for label, pattern in forms:
@@ -841,12 +917,73 @@ def _kill(process: "subprocess.Popen[bytes]", *, group: bool) -> None:
         pass  # already gone
 
 
+def _descendants(pid: int) -> List[int]:
+    """Every process that descends from *pid* right now, nearest first. Empty where that cannot be read.
+
+    Read from the process table: ``/proc`` on Linux, ``/bin/ps`` elsewhere. A
+    process whose parent has already exited has been handed to init and is
+    no longer a descendant of anything here: one that made itself a daemon
+    is not found.
+    """
+    parents: Dict[int, int] = {}
+    try:
+        if os.path.isdir("/proc/self"):
+            for name in os.listdir("/proc"):
+                if not name.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{name}/stat", "rb") as status:
+                        fields = status.read().rsplit(b")", 1)[-1].split()  # the name may hold spaces and brackets
+                    parents[int(name)] = int(fields[1])
+                except (OSError, ValueError, IndexError):
+                    continue  # gone since it was listed
+        elif os.name != "nt":
+            listed = subprocess.run(
+                ["/bin/ps", "-axo", "pid=,ppid="], stdin=subprocess.DEVNULL, capture_output=True, timeout=3,
+                env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"}, check=False,
+            )
+            for line in listed.stdout.splitlines():
+                parts = line.split()
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    parents[int(parts[0])] = int(parts[1])
+    except (OSError, subprocess.SubprocessError):
+        return []
+    found: List[int] = []
+    wave = [pid]
+    while wave:
+        wave = [child for child, parent in parents.items() if parent in wave and child not in found and child != pid]
+        found.extend(wave)
+    return found
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _signal_each(pids: Sequence[int], signum: int) -> None:
+    for pid in pids:
+        try:
+            os.kill(pid, signum)
+        except OSError:
+            pass  # already gone, or no longer ours to signal
+
+
 def _stop(process: "subprocess.Popen[bytes]", *, group: bool) -> None:
-    """Stop the child: ask it to, give it ``_TERMINATE_GRACE`` seconds, then kill it.
+    """Stop the child and what it started: ask, give ``_TERMINATE_GRACE`` seconds, then kill.
 
     With *group* the child leads a process group of its own and the whole
-    group is signalled, so the programs it started stop with it.
+    group is signalled. Either way the processes that descend from the child
+    are found first, while it is still their ancestor, and are signalled
+    too: a program the command left in the background, or put in a session
+    of its own, holds the same injected values and must not be left running
+    by a time limit. A process that detached itself completely (its parent
+    exited: a daemon) is not found, and is not stopped.
     """
+    others = _descendants(process.pid) if os.name != "nt" else []
     try:
         if group and os.name != "nt":
             os.killpg(process.pid, signal.SIGTERM)
@@ -854,11 +991,18 @@ def _stop(process: "subprocess.Popen[bytes]", *, group: bool) -> None:
             process.terminate()
     except OSError:
         pass  # already gone
+    _signal_each(others, signal.SIGTERM)
+    deadline = time.monotonic() + _TERMINATE_GRACE
     try:
         process.wait(_TERMINATE_GRACE)
     except subprocess.TimeoutExpired:
         pass
+    # The grace is for all of them: a command that stops at once must not cost its children theirs.
+    while others and time.monotonic() < deadline and any(_alive(pid) for pid in others):
+        time.sleep(0.05)
     _kill(process, group=group)
+    if others:
+        _signal_each(others, signal.SIGKILL)
     process.wait()
 
 
@@ -1088,8 +1232,9 @@ def run_command(
     :class:`CommandNotExecutableError` (126) if the command cannot be started,
     :class:`UsageError` for an unusable argument, variable or directory, and
     :class:`CommandTimeoutError` (124) after stopping the child -- SIGTERM,
-    then SIGKILL -- when *timeout* seconds have passed. Only the command
-    itself is stopped then; programs it started may outlive it.
+    then SIGKILL -- when *timeout* seconds have passed. The processes that
+    descend from the command are stopped with it; one that made itself a
+    daemon is not found and may outlive it.
     """
     arguments, program, environment, directory, limit = _prepare(
         argv, injected, literals, base_env, cwd, timeout, executable

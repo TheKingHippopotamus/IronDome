@@ -36,6 +36,7 @@ import io
 import os
 import re
 import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -46,19 +47,21 @@ from irondome import device as devices
 from irondome.agent import refs
 from irondome.cli.context import ENV_GRANT, PURPOSE_REVEAL, Access, Context
 from irondome.cli.output import format_duration, format_time
-from irondome.crypto import Argon2Params, default_argon2
+from irondome.crypto import DEFAULT_ARGON2, Argon2Params, default_argon2
 from irondome.device.base import POLICY_BIOMETRY, POLICY_DEVICE, DeviceBackend
 from irondome.errors import (
     AuthError,
     HardwareError,
     IronDomeError,
+    LockedOutError,
     NotFoundError,
     PolicyError,
     UsageError,
     VaultError,
 )
+from irondome.generator import estimate_strength
 from irondome.keys import KIND_DEVICE, KIND_PASSWORD, KIND_RECOVERY, Keyslot
-from irondome.secmem import SecureBuffer, read_secret, read_secret_from_fd, wipe_bytes
+from irondome.secmem import SecureBuffer, _wipe_str, read_secret, read_secret_from_fd, wipe_bytes
 from irondome.unlock import MODE_PASSWORD, MODE_TOUCHID, MODE_TOUCHID_PASSWORD, MODES, create_vault, unlock
 from irondome.vault import (
     AGENT_POLICIES,
@@ -269,8 +272,9 @@ def _mode_of(slots: Sequence[Keyslot]) -> str:
 
 
 def _hardware_of(name: Optional[str]) -> Optional[bool]:
+    """Whether the backend *name* is a chip on this machine (a TPM simulator is not), or None if unknown."""
     try:
-        return devices.get_backend(str(name)).hardware
+        return devices.hardware_here(devices.get_backend(str(name)))
     except IronDomeError:
         return None
 
@@ -286,11 +290,17 @@ def _slot_info(slot: Keyslot) -> Dict[str, Any]:
         "policy": slot.policy,
         "hardware": None,
         "device_present": None,
+        "kdf": None,
     }
+    if slot.kind == KIND_PASSWORD and slot.kdf is not None:
+        try:
+            info["kdf"] = cost_phrase(Argon2Params.from_dict(slot.kdf))
+        except IronDomeError:
+            pass  # a damaged keyslot is reported where it is opened
     if slot.device is not None:
         try:
             backend = devices.get_backend(str(slot.backend_name))
-            info["hardware"] = backend.hardware
+            info["hardware"] = devices.hardware_here(backend)
             info["device_present"] = bool(backend.exists(slot.device))
         except (IronDomeError, OSError):
             pass  # an unknown backend or a damaged descriptor: reported as unknown
@@ -303,7 +313,8 @@ def _devices_of(slots: Sequence[Keyslot]) -> List[Dict[str, Any]]:
 
 
 def _device_phrase(device: Dict[str, Any]) -> str:
-    kind = {True: "hardware", False: f"not hardware: a file in {paths.device_dir()}", None: "unknown here"}
+    where = f"a file in {paths.device_dir()}" if device["backend"] == "software" else "software stands in for the chip"
+    kind = {True: "hardware", False: f"not hardware: {where}", None: "unknown here"}
     return f"{device['backend']} ({kind[device['hardware']]})"
 
 
@@ -457,6 +468,51 @@ def _chip_status() -> Dict[str, Optional[str]]:
     return {"why": why, "fix": fix}
 
 
+def cost_phrase(params: Argon2Params) -> str:
+    """The Argon2id cost in words, and whether it is below what IronDome uses by default."""
+    lanes = "lane" if params.lanes == 1 else "lanes"
+    passes = "pass" if params.iterations == 1 else "passes"
+    text = f"Argon2id, {params.memory_kib // 1024} MiB, {params.iterations} {passes}, {params.lanes} {lanes}"
+    if params.memory_kib < DEFAULT_ARGON2.memory_kib:
+        text += f" (below the usual {DEFAULT_ARGON2.memory_kib // 1024} MiB)"
+    return text
+
+
+def warn_if_cheap(ctx: Context, params: Argon2Params, what: str) -> None:
+    """Say so when *what* was made with less Argon2id memory than the default, and why that is.
+
+    The cost is lowered by an environment variable, by an option or by a small machine, and none of
+    them is visible afterwards: a person must not find out from a stopwatch.
+    """
+    if params.memory_kib >= DEFAULT_ARGON2.memory_kib:
+        return
+    if os.environ.get("IRONDOME_KDF_MEMORY_MIB"):
+        why = "IRONDOME_KDF_MEMORY_MIB is set in the environment"
+    elif params == default_argon2():
+        why = "this machine has less than 3 GiB of RAM"
+    else:
+        why = "that is the cost it was asked for, or the cost of the keyslot it replaces"
+    ctx.out.warn(
+        f"{what} stretches its password with {params.memory_kib // 1024} MiB of memory, not the usual "
+        f"{DEFAULT_ARGON2.memory_kib // 1024} MiB ({why}): each guess at the password costs an attacker that much less"
+    )
+
+
+_WEAK_LABELS = ("very weak", "weak")
+
+
+def _warn_if_weak(ctx: Context, password: SecureBuffer) -> None:
+    """A remark, never a refusal, when a new master password is one a guessing program finds early."""
+    strength = estimate_strength(password)
+    if strength.label in _WEAK_LABELS:
+        reason = f" ({strength.warnings[0]})" if strength.warnings else ""
+        ctx.out.warn(
+            f"that master password is {strength.label}{reason}. The device key keeps a copied vault file from "
+            "being guessed at, but whoever has this machine or its files can still try passwords: a longer "
+            "passphrase costs nothing here (irondome gen --words 6 makes one; irondome passwd changes it)"
+        )
+
+
 def _params_of(slots: Sequence[Keyslot]) -> Argon2Params:
     """The Argon2id cost of the first password slot, or today's default when there is none."""
     for slot in slots:
@@ -484,6 +540,7 @@ def _replace_slots(
     add: Sequence[Keyslot],
     purge: bool = False,
     end_sessions: bool = False,
+    forget: Sequence[Keyslot] = (),
 ) -> Tuple[int, int]:
     """Swap keyslots and write the vault; then destroy the device secrets of the slots that went.
 
@@ -501,6 +558,10 @@ def _replace_slots(
     new slots' secrets instead, which nothing refers to, and never the old ones. Old device secrets
     go only once the new file is on disk: whatever happens, the vault still opens. Returns
     ``(snapshots deleted, sessions ended)``.
+
+    *forget* are keyslots taken out of the file whose device secrets are left alone: they are not on
+    this machine, or cannot be reached from it, so there is nothing here to destroy and nothing to
+    keep trying to (``recovery use`` on a machine that never held them, or whose chip has died).
     """
     purged = ended = 0
     with paths.file_lock(paths.lock_file()):
@@ -513,7 +574,7 @@ def _replace_slots(
                 ended = _end_sessions(ctx, vault)
             for slot in add:
                 vault.add_slot(slot)
-            for slot in remove:
+            for slot in [*remove, *forget]:
                 vault.remove_slot(slot.id)
             recorded = keys.record_retirement([*remove, *add])
             with _CarriedThrough(ctx):
@@ -549,7 +610,7 @@ def _open_with_password(ctx: Context, reason: str) -> Iterator[Tuple[Vault, Opti
     file = VaultFile.load()
     password: Optional[SecureBuffer] = None
     if any(slot.kind == KIND_PASSWORD for slot in file.slots):
-        password = ctx.master_password()
+        password = ctx.master_password(reason)
         may_touch = not ctx.no_touch and (ctx.has_terminal or ctx.touch)
         try:
             with _naming_the_bunker():
@@ -667,8 +728,8 @@ def _say_rekeyed(ctx: Context, report: Dict[str, Any]) -> None:
     )
     if report["audit_archive"]:
         ctx.out.info(
-            f"The audit log was archived as {report['audit_archive']}: its records were sealed under the old "
-            "vault key and can no longer be checked against the new one."
+            f"The audit log was archived as {report['audit_archive']}. Read or check it with: "
+            f"irondome audit --archive {Path(report['audit_archive']).name}"
         )
     ctx.out.warn(
         "copies of the vault file made before now (backups, synced folders) still open with the old recovery "
@@ -765,13 +826,20 @@ def _create(ctx: Context, args: argparse.Namespace) -> int:
     ctx.out.info(f"Creating the vault of bunker {name}. Device key: {_backend_phrase(backend)}.")
     if choice.picked == "auto" and choice.why_no_chip is not None:
         ctx.out.warn(f"no security chip holds this vault's device key: {choice.why_no_chip}")
+        held = (
+            f"The device key is a file in {paths.device_dir()}: anyone who can read your files can copy it."
+            if backend.name == "software"
+            else f"The device key is held by {backend.name}, which on this machine is software and not a chip: "
+            "whoever can read what that software stores can copy it."
+        )
         ctx.out.info(
-            f"The device key is a file in {paths.device_dir()}: anyone who can read your files can copy it. "
-            f"A chip needs {devices.chip_requirements()}; once that is in place, irondome rekey moves the "
-            "vault onto it (and shows a new recovery key)."
+            f"{held} A chip needs {devices.chip_requirements()}; once that is in place, irondome rekey moves "
+            "the vault onto it (and shows a new recovery key)."
         )
     password = None if args.no_password else ctx.new_master_password()
     try:
+        if password is not None:
+            _warn_if_weak(ctx, password)
         vault, recovery = create_vault(
             mode=mode, password=password, with_recovery=not args.no_recovery, params=params, backend_name=backend.name
         )
@@ -779,6 +847,7 @@ def _create(ctx: Context, args: argparse.Namespace) -> int:
         if password is not None:
             password.wipe()
     with vault:
+        used = _params_of(vault.slots(KIND_PASSWORD)) if vault.slots(KIND_PASSWORD) else None
         ctx.audit(
             vault, "vault.create", target=name,
             detail=f"mode={mode} backend={backend.name} recovery={'yes' if recovery else 'no'}",
@@ -799,6 +868,8 @@ def _create(ctx: Context, args: argparse.Namespace) -> int:
     else:
         ctx.out.ok(f"created the vault of bunker {name} at {path}")
         ctx.out.info(f"It opens with: {_MODE_PHRASES[mode]}.")
+        if used is not None:
+            ctx.out.info(f"Password stretching: {cost_phrase(used)}.")
         if recovery is not None:
             _show_recovery_key(ctx, recovery, name)
         else:
@@ -877,7 +948,8 @@ def _slot_line(info: Dict[str, Any]) -> str:
     if info["kind"] == KIND_RECOVERY:
         return f"{info['describe']} (not bound to this device)"
     present = {True: "device key present", False: "device key MISSING: this keyslot cannot open", None: "unknown"}
-    return f"{_safe(info['describe'])} -- {present[info['device_present']]}"
+    cost = f"; {info['kdf']}" if info.get("kdf") else ""
+    return f"{_safe(info['describe'])} -- {present[info['device_present']]}{cost}"
 
 
 def _print_status(ctx: Context, document: Dict[str, Any]) -> None:
@@ -1146,6 +1218,8 @@ def _agent_note(ctx: Context, policy: Optional[str], name: str) -> None:
         ctx.out.info(f"Agents approved by Touch ID may use {_safe(name)} with irondome run, but not see it.")
     elif policy == "reveal":
         ctx.out.info(f"Agents approved by Touch ID may use and see {_safe(name)}.")
+    if policy in ("use", "reveal") and sys.platform != "darwin":
+        ctx.out.info("Touch ID approval exists on a Mac only. Here an agent reaches it through a grant you create.")
 
 
 # ---------------------------------------------------------------------------
@@ -1165,7 +1239,10 @@ def _add(ctx: Context, args: argparse.Namespace) -> int:
     _check_note_source(args)
     settings = config.load()
     bunker = _bunker()
-    with _unlocked(ctx, f"add {name} to bunker {bunker}") as vault:
+    # An entry that agents may use or see is a standing permission, which outlasts any session: as in edit.
+    with _unlocked(
+        ctx, f"add {name} to bunker {bunker}", fresh=args.agent in ("use", "reveal")
+    ) as vault:
         _skip_password_line(ctx)
         if vault.has_name(name):
             raise UsageError(f"bunker {bunker} already has an entry named {name!r}; change it with: irondome edit")
@@ -1496,7 +1573,8 @@ def _edit(ctx: Context, args: argparse.Namespace) -> int:
         raise UsageError("nothing to change: give at least one option, for example --username or --generate")
     settings = config.load()
     bunker = _bunker()
-    with _unlocked(ctx, f"change {args.name} in bunker {bunker}") as vault:
+    # What agents may do with an entry outlasts any session, so a session alone cannot change it.
+    with _unlocked(ctx, f"change {args.name} in bunker {bunker}", fresh=args.agent is not None) as vault:
         _skip_password_line(ctx)
         entry = vault.find(args.name)
         changed = [key for key, value in metadata.items() if value is not None]
@@ -1875,6 +1953,131 @@ def _recovery_remove(ctx: Context, args: argparse.Namespace) -> int:
     if all(slot["backend"] for slot in report["keyslots"]):
         ctx.out.warn("this vault now opens only on this machine: losing it, or its security chip, loses the vault")
     return 1 if report["leftovers"] else 0
+
+
+def _device_key_here(slot: Keyslot) -> bool:
+    """True when *slot*'s device key is on this machine and its backend can be asked about it now."""
+    if slot.device is None:
+        return False
+    try:
+        return bool(devices.get_backend(str(slot.backend_name)).exists(slot.device))
+    except Exception:  # an unknown backend, a chip that does not answer: not something to destroy here
+        return False
+
+
+def _recovery_use(ctx: Context, args: argparse.Namespace) -> int:
+    """Open the vault with its recovery key and give it a master password that works on this machine.
+
+    This is what the recovery key is for: the machine, its security chip or the device key file is
+    gone, or the master password is forgotten. Every keyslot that needs a device key is replaced by
+    one new password keyslot on this machine; the recovery keyslot stays as it is.
+    """
+    if ctx.agent_mode:
+        raise PolicyError(
+            "opening the vault with its recovery key is for the vault's owner: run it at a terminal, or pipe the "
+            "recovery key and the new master password with --password-stdin"
+        )
+    _require_vault()
+    bunker = _bunker()
+    _finish_retirement(ctx)
+    file = VaultFile.load()
+    if not any(slot.kind == KIND_RECOVERY for slot in file.slots):
+        raise NotFoundError(
+            f"the vault of bunker {bunker} has no recovery key: it was made with --no-recovery, or the key was removed"
+        )
+    backend = _choose_backend(POLICY_DEVICE)  # before anything is asked for
+    typed = ctx.read_secret("Recovery key: ")
+    if typed is None:
+        raise AuthError("the recovery key cannot be empty")
+    text = ""
+    try:
+        text = bytes(typed.view()).decode("utf-8", "replace").strip()
+        with _naming_the_bunker():
+            key = unlock(file, recovery_key=text)
+    finally:
+        typed.wipe()
+        _wipe_str(text)
+    with Vault(file, key) as vault:
+        old = vault.slots(KIND_PASSWORD) + vault.slots(KIND_DEVICE)
+        touch = sum(1 for slot in old if slot.kind == KIND_DEVICE or slot.policy not in (None, POLICY_DEVICE))
+        password = ctx.new_master_password()
+        try:
+            slot = _new_password_slot(
+                vault, password, backend=backend, policy=POLICY_DEVICE, label="master password",
+                params=_params_of(old),
+            )
+        except LockedOutError as exc:
+            # Found by using it: a TPM in lockout takes no new keyslot either, so the recovery key seemed
+            # useless exactly when wrong guesses had locked the owner out. A file-based device key is the
+            # way in until the chip answers again; nothing was changed by this attempt.
+            raise LockedOutError(
+                f"{exc}\nThe security chip will not take a new keyslot until then, and nothing was changed. To get "
+                f"in now, keep the new device key in a file instead: {devices.ENV_BACKEND}=software irondome "
+                "recovery use (irondome rekey moves the vault back onto the chip afterwards)"
+            ) from None
+        finally:
+            password.wipe()
+        # An old keyslot's device key is destroyed where it is on this machine, as passwd does. Where it is
+        # not (another machine's, a dead chip's), the keyslot just goes: there is nothing here to destroy.
+        here = [each for each in old if _device_key_here(each)]
+        gone = [each for each in old if each not in here]
+        # As for passwd: the snapshots and the sessions belong to the keyslots that go.
+        purged, ended = _replace_slots(
+            ctx, vault, remove=here, add=[slot], purge=True, end_sessions=True, forget=gone
+        )
+        ctx.audit(
+            vault, "keyslot.recovery-use", target=slot.id,
+            detail=f"opened with the recovery key; {_count(len(old), 'keyslot')} replaced, "
+            f"{_count(purged, 'snapshot')} purged, {_count(ended, 'session')} ended",
+        )
+    if ctx.out.json_mode:
+        ctx.out.json(
+            {
+                "bunker": bunker,
+                "recovered": True,
+                "backend": backend.name,
+                "replaced": len(old),
+                "device_keys_destroyed": len(here),
+                "snapshots_purged": purged,
+                "sessions_ended": ended,
+            }
+        )
+        return 0
+    ctx.out.ok(
+        f"bunker {bunker} opened with its recovery key. It now opens with the new master password on this "
+        f"machine ({_backend_phrase(backend)})"
+    )
+    if old:
+        ctx.out.info(
+            f"{_count(len(old), 'old keyslot')} removed: the old master password and device key open nothing in "
+            "this vault file any more."
+        )
+    if here:
+        ctx.out.info(
+            f"{_count(len(here), 'old device key')} was on this machine and was destroyed: any other copy of "
+            "this vault here that still used it now opens only with the recovery key."
+            if len(here) == 1
+            else f"{_count(len(here), 'old device key')} were on this machine and were destroyed: any other copy "
+            "of this vault here that still used them now opens only with the recovery key."
+        )
+    if gone:
+        ctx.out.info(
+            f"The device key of {_count(len(gone), 'old keyslot')} is not on this machine, or cannot be reached "
+            "from it, and was left alone: where it still exists, the old master password still opens old copies "
+            "of the vault file."
+        )
+    if touch:
+        ctx.out.info("Touch ID is no longer enrolled. Enrol again with: irondome auth touchid")
+    if os.environ.get(devices.ENV_BACKEND) == "software":
+        ctx.out.info(
+            f"The new device key is a file, because {devices.ENV_BACKEND}=software was set. To move the vault onto "
+            "a security chip once it is usable: irondome rekey, without that variable"
+        )
+    ctx.out.warn(
+        "the recovery key you typed still opens this vault and every copy of it. If anyone else may have seen "
+        "it, replace it with: irondome recovery new"
+    )
+    return 0
 
 
 def _auth_show(ctx: Context, args: argparse.Namespace) -> int:
@@ -2393,7 +2596,7 @@ _JSON_KEYSLOTS = """\
 json (--json):
   {"bunker": NAME, "mode": MODE, "keyslots": [KEYSLOT, ...]}
   KEYSLOT: id, kind, label, describe, created, backend, policy, hardware,
-           device_present"""
+           device_present, kdf (the Argon2id cost of a password keyslot)"""
 
 
 def _add_setup_options(parser: argparse.ArgumentParser) -> None:
@@ -2661,14 +2864,27 @@ def register(subparsers: Any, common: argparse.ArgumentParser) -> None:
     )
 
     actions = _group(
-        subparsers, common, "recovery", "recovery_action", "make a new recovery key, or remove it",
-        "Replace or remove the recovery key: the key that opens a copy of the vault without this device. Either "
+        subparsers, common, "recovery", "recovery_action", "use the recovery key, make a new one, or remove it",
+        "The recovery key opens the vault, or a copy of it, without this device and without the master password. "
+        "Use it when the machine, its security chip or the master password is lost. Replacing or removing it "
         "re-keys the vault as irondome rekey does, because only a new vault key stops the old recovery key from "
         "opening it; the master password is asked for each time.",
         [
+            ("irondome recovery use", "open the vault with the recovery key"),
             ("irondome recovery new", "a new recovery key, shown once"),
             ("irondome recovery remove", "no recovery key at all"),
         ],
+    )
+    _command(
+        actions, common, "use", _recovery_use, "open the vault with the recovery key and set a new master password",
+        "Open this bunker's vault with its recovery key, on any machine, and give it a new master password "
+        "bound to this machine's device key. For a lost or replaced machine, a cleared security chip, a lost "
+        "device key file or a forgotten master password: put the vault file back in place first (irondome "
+        "status shows where it belongs). Every keyslot that needed the old device key or the old password, "
+        "Touch ID keyslots included, is replaced by the new one; the snapshots are deleted and sessions end. "
+        "The recovery key itself is not changed. stdin lines with --password-stdin: the recovery key, then the "
+        "new master password.",
+        [("irondome recovery use", "the recovery key, then the new master password twice")],
     )
     action = _command(
         actions, common, "new", _recovery_new, "replace the recovery key with a new one, shown once",

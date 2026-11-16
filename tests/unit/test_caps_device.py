@@ -1255,7 +1255,9 @@ def test_real_tpm_nuke_leaves_a_restored_copy_of_the_vault_directory_dead(chip, 
 
     report = nuke.execute()
 
-    assert report.success and report.device_keys_destroyed == 2 and report.hardware_backed
+    assert report.success and report.device_keys_destroyed == 2
+    # "Held by a security chip" is what the TPM's own probe says of this machine: a simulator is software.
+    assert report.hardware_backed is device.hardware_here(chip)
     assert not indices & nv_handles(), "both indices are gone from the chip"
     shutil.copytree(copy, paths.root())
     assert_dead(session, grant)

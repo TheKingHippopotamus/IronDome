@@ -1810,7 +1810,8 @@ LIST_SHAPES = {
                                           "grants", "current", "default", "error"}),
     "config ls": ({"bunker", "settings"}, "settings", {"key", "value", "default", "minimum", "maximum", "help"}),
     "auth show": ({"bunker", "mode", "keyslots"}, "keyslots", {"id", "kind", "label", "describe", "created",
-                                                              "backend", "policy", "hardware", "device_present"}),
+                                                              "backend", "policy", "hardware", "device_present",
+                                                              "kdf"}),
 }
 
 
@@ -2035,12 +2036,31 @@ def test_init_at_a_terminal_asks_twice_and_waits_until_the_key_is_kept(
 
 
 def test_init_at_a_terminal_refuses_two_different_passwords(terminal: Callable[..., Terminal]) -> None:
+    """Three tries, then it gives up: a command that left at the first slip would leave what the person
+    types next, often the password again, to be read by the shell as a command."""
     session = terminal("init")
+    for _ in range(3):
+        session.secret("New master password: ", PASSWORD)
+        session.secret("Repeat it: ", PASSWORD2)
+        session.expect("do not match")
+    assert session.finish() == 2
+    assert not paths.vault_file().exists()
+
+
+@needs_line_prompts
+def test_init_at_a_terminal_asks_again_after_a_slip_and_then_makes_the_vault(terminal: Callable[..., Terminal]) -> None:
+    session = terminal("init", "--no-recovery")
+    session.secret("New master password: ", "short")
+    session.expect("at least")
+    session.expect("Try again")
     session.secret("New master password: ", PASSWORD)
     session.secret("Repeat it: ", PASSWORD2)
     session.expect("do not match")
-    assert session.finish() == 2
-    assert not paths.vault_file().exists()
+    session.secret("New master password: ", PASSWORD)
+    session.secret("Repeat it: ", PASSWORD)
+    session.expect("created the vault")
+    assert session.finish() == 0
+    assert paths.vault_file().exists()
 
 
 @needs_line_prompts
@@ -2058,6 +2078,26 @@ def test_init_at_a_terminal_offers_the_modes_where_touch_id_works(
     assert session.finish() == 0, session.output
     assert _slots(cli, touch.env) == [("password", "fake-touch", "biometry"), ("recovery", None, None)]
     assert touch.prompts()[0]["operation"] == "enroll"
+
+
+@needs_line_prompts
+def test_the_password_prompt_says_on_the_terminal_what_typing_the_password_will_do(
+    cli: Run, vault: str, terminal: Callable[..., Terminal]
+) -> None:
+    """The prompt is what a person answers, so it says what the answer authorises, where they are looking.
+
+    It is part of the prompt, written to the terminal: ``--quiet`` hides the command's messages and not this.
+    A name with characters a terminal would act on is shown escaped.
+    """
+    session = terminal("--quiet", "grant", "create", "github")
+    session.expect("To create a grant for github:")
+    session.secret("Master password: ", PASSWORD)
+    assert session.finish() == 0, session.output
+    session = terminal("show", "no\x1b[2Ksuch")
+    session.expect("To ")
+    session.secret("Master password: ", PASSWORD)
+    session.finish()
+    assert "\x1b[2K" not in session.output and "\\x1b[2Ksuch" in session.output
 
 
 def test_a_value_typed_at_the_hidden_prompt_is_never_echoed(

@@ -47,6 +47,7 @@ __all__ = [
     "choose",
     "choose_backend",
     "get_backend",
+    "hardware_here",
     "probe_all",
     "report_progress",
     "set_progress",
@@ -183,6 +184,19 @@ def applies_here(name: str) -> bool:
     system only (a TPM key named on a Mac is not on this machine), the file-based one everywhere."""
     system = _SYSTEMS.get(name)
     return system is None or sys.platform.startswith(system)
+
+
+def hardware_here(backend: DeviceBackend) -> bool:
+    """Whether *backend* keeps its keys in a chip on this machine, as its own probe says, compiling nothing.
+
+    The class attribute says what the backend is for; the probe says what is behind it here. A TPM 2.0
+    simulator is reached through the TPM backend and is software: every place that tells a person
+    "hardware" or "security chip" asks this, so that they all say the same thing.
+    """
+    try:
+        return bool(backend.hardware and _probe(backend, True).hardware)
+    except Exception:  # a backend that cannot be asked right now is described by what it is for
+        return bool(backend.hardware)
 
 
 def _probe(backend: DeviceBackend, passive: bool) -> Probe:

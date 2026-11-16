@@ -84,6 +84,42 @@ The new architecture removes all of them:
 - `bunker open <name>` printed every matching password without
   re-authentication.
 
+### Found by using it, before release
+
+The whole test suite passed, and then a reviewer was given the built package,
+the published texts and a machine to watch, and no source code. What that
+found, and what was done:
+
+- **No command accepted the recovery key.** The key was tested through the
+  Python interface only. `irondome recovery use` now opens the vault with
+  it, on any machine, and sets a new master password bound to that machine;
+  the refusal that told people to "use your recovery key" names the command.
+- **A session could make a grant that outlived it** (a one-minute session, a
+  30-day grant, no password). Under a session alone the commands now refuse
+  a grant that would outlast it, and any setting of what agents may do with
+  an entry, until the master password is given again; what a session does is
+  recorded as `session`. The token still unwraps the vault key, so this
+  binds IronDome's commands, not a program that uses the token itself.
+- **Masking missed ordinary encodings of a generated password**: percent-
+  encoding as `encodeURI` and Python's `quote` write it, lower-case escapes,
+  HTML escaping, JSON inside JSON, and a secret of several lines printed with
+  a prefix on each line. All are masked now.
+- **After a re-key nothing could read the audit log from before it.** The log
+  is still set aside, and what reads it now travels in the new vault's
+  encrypted index: `irondome audit --archive NAME`.
+- **`run --timeout` stopped only the command itself** and left the programs it
+  had started running with the secret in their environment. They are stopped
+  with it.
+- **The program contradicted itself about a software TPM** ("hardware" in
+  `status`, "not a security chip" in `init`). Every place now asks the same
+  question of the machine.
+- **A lowered Argon2id cost and a weak master password went unmentioned.**
+  `init` and `status` show the cost; `init` and `export` warn when it is
+  below the default, and `init` remarks on a weak password.
+- Stated as limits, not changed: anything running as you can push a TPM into
+  lockout with wrong passwords; `.env.irondome` in the working directory is
+  read without asking (the variables it supplies are now listed).
+
 ### Added
 
 - **Cryptography:** Argon2id (256 MiB, t=3, p=4 by default, 64 MiB on a

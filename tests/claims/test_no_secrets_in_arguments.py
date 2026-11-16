@@ -103,6 +103,7 @@ ALLOWED: Dict[Tuple[str, str], str] = {
     ("grant revoke", "id_prefix"): "the start of a grant's id, which grant ls shows to anyone",
     ("unlock", "ttl"): "a duration",
     ("audit", "count"): "a number of records",
+    ("audit", "archive"): "the file name of an archived audit log",
     ("scan", "paths"): "files and directories to search",
     ("mcp", "touch_timeout"): "a number of seconds",
     ("mcp config", "client"): "an MCP client's name",

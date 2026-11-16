@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Dict, List, NamedTuple
 
 from irondome import audit, paths
@@ -88,6 +89,10 @@ def _stored() -> Dict[str, int]:
     return {key: value for key, value in current.items() if value != SETTINGS[key].default}
 
 
+_DURATION = re.compile(r"([0-9]{1,9})([smhd])")
+_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+
+
 def set_value(key: str, raw: str) -> int:
     """Validate and store one setting. Returns the stored value.
 
@@ -97,10 +102,14 @@ def set_value(key: str, raw: str) -> int:
     if key not in SETTINGS:
         raise UsageError(f"unknown setting {key!r}; known settings: {', '.join(sorted(SETTINGS))}")
     setting = SETTINGS[key]
+    text = str(raw).strip()
+    # A lifetime is stored in seconds and may be given the way --ttl takes it: 90s, 15m, 2h, 1d.
+    lifetime = _DURATION.fullmatch(text.lower()) if key.endswith("_ttl") else None
     try:
-        value = int(str(raw).strip())
+        value = int(lifetime.group(1)) * _UNIT_SECONDS[lifetime.group(2)] if lifetime else int(text)
     except ValueError:
-        raise UsageError(f"{key} must be a whole number") from None
+        how = " of seconds, or a duration such as 15m or 2h" if key.endswith("_ttl") else ""
+        raise UsageError(f"{key} must be a whole number{how}") from None
     if not setting.minimum <= value <= setting.maximum:
         raise UsageError(f"{key} must be between {setting.minimum} and {setting.maximum}")
     with paths.file_lock(paths.lock_file()):

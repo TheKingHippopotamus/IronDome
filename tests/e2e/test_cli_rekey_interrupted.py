@@ -180,6 +180,38 @@ def test_a_rekey_killed_after_the_switch_is_finished_by_the_next_one(cli: CLI, i
         unlock(current, recovery_key=old_recovery)
 
 
+def test_the_audit_history_survives_a_rekey_killed_after_the_switch(cli: CLI) -> None:
+    """What reads the old log is in the new vault from the switch on, so a kill right after it loses no history.
+
+    The killed re-key never set the log aside, so the records made next, under the new vault key, follow the
+    old ones in the same file. The re-key that finishes the job archives that file; each of its lines is read
+    with the key it was written under, and the whole of it verifies.
+    """
+    ok(cli("init", "--password-stdin", "--no-recovery", stdin=PASSWORD + "\n"))
+    ok(cli("add", "first", "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\nvalue-1\n"))
+    killed = run_with_fault("kill-after-switch", "rekey", "--yes", "--password-stdin", "--json")
+    assert killed.returncode == -signal.SIGKILL, killed.stderr
+    ok(cli("add", "second", "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\nvalue-2\n"))
+    assert rekey(cli)["leftovers"] == []
+    ok(cli("add", "third", "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\nvalue-3\n"))
+    assert rekey(cli)["leftovers"] == []
+    from irondome import audit
+
+    archives = [path.name for path in audit.archives()]  # oldest first
+    assert len(archives) == 2
+    seen: List[str] = []
+    for name in archives:
+        shown = json.loads(
+            ok(cli("audit", "-n", "0", "--verify", "--json", "--archive", name, "--password-stdin",
+                   stdin=PASSWORD + "\n")).stdout
+        )
+        assert shown["verify"]["ok"], (name, shown["verify"])
+        seen += [f"{event['action']} {event['target']}".strip() for event in shown["events"]]
+    assert [line for line in seen if line.startswith(("vault.create", "entry.add"))] == [
+        "vault.create alpha", "entry.add first", "entry.add second", "entry.add third",
+    ]
+
+
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 def test_a_rekey_interrupted_after_the_switch_still_shows_the_new_recovery_key(
     cli: CLI, isolated: Path, json_mode: bool

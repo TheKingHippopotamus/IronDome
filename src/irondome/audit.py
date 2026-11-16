@@ -41,7 +41,12 @@ line here.
 
 The owner key comes from the vault key, so a vault that is given a new vault
 key can no longer check the lines written before: :func:`archive` the log
-first.
+first, and :func:`carry_keys` so that it can still be read. That puts the old
+owner key (not the old vault key, and nothing that opens an entry) into the
+new vault's encrypted index, sealed once more under a key of the new vault,
+together with the keys the old vault carried for the logs before it.
+:func:`read` and :func:`verify` try them when they are given an archived
+log's path.
 
 :func:`record` either appends one complete line or raises :class:`AuditError`
 and leaves the file as it was. Callers decide what a failure means for them:
@@ -67,7 +72,20 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, Deque, Dict, Iterator, List, Optional, Tuple, Union
 
 from irondome import paths
-from irondome.crypto import KEY_LEN, NONCE_LEN, TAG_LEN, DecryptError, b64d, b64e, hkdf, open_sealed, pad, seal, unpad
+from irondome.crypto import (
+    KEY_LEN,
+    NONCE_LEN,
+    TAG_LEN,
+    DecryptError,
+    b64d,
+    b64e,
+    hkdf,
+    open_sealed,
+    open_sealed_into,
+    pad,
+    seal,
+    unpad,
+)
 from irondome.errors import IronDomeError, UsageError, VaultError
 from irondome.keys import VAULT_ID_LEN
 from irondome.secmem import BufferLike, SecureBuffer, as_view, wipe_bytes
@@ -86,6 +104,8 @@ __all__ = [
     "read",
     "verify",
     "archive",
+    "archives",
+    "carry_keys",
     "strict_loads",
 ]
 
@@ -653,6 +673,98 @@ def archive() -> Optional[Path]:
         raise AuditError(f"the audit log {path} could not be archived ({_reason(exc)})") from None
 
 
+_LABEL_ARCHIVE = b"irondome/v4/audit/archive"
+_ARCHIVE_NAME = re.compile(r"audit-(\d{8}T\d{6}Z)(?:-(\d+))?\.log")
+
+
+def archives() -> List[Path]:
+    """The logs :func:`archive` set aside in this bunker, oldest first."""
+    try:
+        listed = os.listdir(str(paths.audit_file().parent))
+    except OSError:
+        return []
+    found = []
+    for name in listed:
+        match = _ARCHIVE_NAME.fullmatch(name)
+        if match:  # two in one second: the second is "-2", which a plain sort would put first
+            found.append((match.group(1), int(match.group(2) or 1) if len(match.group(2) or "1") < 10 else 0, name))
+    return [paths.audit_file().with_name(name) for _, _, name in sorted(found)]
+
+
+#: In a vault's encrypted index: what reads the audit logs written under the vault keys before this one.
+META_KEPT_KEYS = "audit_keys"
+_MAX_KEPT_KEYS = 64
+
+
+def _kept_wrap_key(vault: "Vault") -> SecureBuffer:
+    return hkdf(vault.vault_key, info=_LABEL_ARCHIVE, salt=vault.vault_id)
+
+
+def _kept_aad(vault_id: bytes) -> bytes:
+    return _LABEL_ARCHIVE + b"\x00" + vault_id
+
+
+def _kept_items(vault: "Vault") -> List[Tuple[bytes, bytes]]:
+    """``(vault id, sealed owner key)`` for every earlier vault key *vault* carries a log key for."""
+    listed = vault.meta.get(META_KEPT_KEYS)
+    found: List[Tuple[bytes, bytes]] = []
+    for item in listed if isinstance(listed, list) else []:
+        try:
+            vault_id = bytes.fromhex(item["vault_id"])
+            wrap = b64d(item["wrap"], what="kept audit key")
+        except (KeyError, TypeError, ValueError, IronDomeError):
+            continue
+        if len(vault_id) == VAULT_ID_LEN and len(wrap) == NONCE_LEN + KEY_LEN + TAG_LEN:
+            found.append((vault_id, wrap))
+    return found
+
+
+def _kept_keys(vault: "Vault") -> List[Tuple[bytes, SecureBuffer]]:
+    """The owner keys of earlier vault keys, opened into locked memory, newest first. The caller wipes them."""
+    opened: List[Tuple[bytes, SecureBuffer]] = []
+    try:
+        with _kept_wrap_key(vault) as under:
+            for vault_id, wrap in reversed(_kept_items(vault)):
+                owner = SecureBuffer(KEY_LEN)
+                try:
+                    open_sealed_into(under, wrap, _kept_aad(vault_id), owner)
+                except DecryptError:
+                    owner.wipe()
+                    continue
+                opened.append((vault_id, owner))
+    except BaseException:
+        for _, owner in opened:
+            owner.wipe()
+        raise
+    return opened
+
+
+def carry_keys(old: "Vault", fresh: "Vault") -> None:
+    """Put into *fresh*, which is about to replace *old*, what reads the logs written under *old* and before it.
+
+    Call it before *fresh* is written. The old vault's audit owner key, and every such key the old vault
+    carried, go into the new vault's encrypted index, each sealed under a key derived from the new vault key.
+    They are part of the vault file from the moment the new vault is live, so nothing that stops the re-key
+    afterwards can lose them. An owner key authenticates and opens audit records and nothing else: it is
+    derived from its vault key one way, and no entry, keyslot or grant can be opened with it. The keys are
+    handled in locked memory only; what is stored is ciphertext.
+    """
+    items: List[Dict[str, str]] = []
+    earlier = _kept_keys(old)
+    try:
+        with _kept_wrap_key(fresh) as under:
+            for vault_id, owner in reversed(earlier):
+                items.append({"vault_id": vault_id.hex(), "wrap": b64e(seal(under, owner, _kept_aad(vault_id)))})
+            with owner_key(old) as owner:
+                items.append(
+                    {"vault_id": old.vault_id.hex(), "wrap": b64e(seal(under, owner, _kept_aad(old.vault_id)))}
+                )
+    finally:
+        for _, owner in earlier:
+            owner.wipe()
+    fresh.meta[META_KEPT_KEYS] = items[-_MAX_KEPT_KEYS:]
+
+
 # ---------------------------------------------------------------------------
 # Reading and verifying
 # ---------------------------------------------------------------------------
@@ -682,7 +794,6 @@ def _scan(
 ) -> Tuple[List[AuditEvent], int, List[str]]:
     """Walk the log once. Returns the newest *limit* events, the event count, the problems."""
     target = Path(path) if path is not None else paths.audit_file()
-    vault_id = vault.vault_id
     events: Deque[AuditEvent] = deque(maxlen=limit)
     problems = _Problems()
     count = 0
@@ -697,7 +808,14 @@ def _scan(
             if os.fstat(fd).st_size > paths.MAX_FILE_BYTES:
                 return [], 0, [f"the log is larger than {paths.MAX_FILE_BYTES} bytes and was not read"]
             handle = stack.enter_context(open(fd, "rb", closefd=False))
-            keys = stack.enter_context(_KeyRing(stack.enter_context(owner_key(vault))))
+            # The log in use is written under this vault's key. One that a re-key set aside was written under
+            # the vault key before it (after an interrupted re-key, under two of them): the vault carries those
+            # keys, and each line is opened with the one that fits, the one that fitted the line before first.
+            owners = [(vault.vault_id, owner_key(vault))] + (_kept_keys(vault) if path is not None else [])
+            for _, owner in owners:
+                stack.enter_context(owner)
+            rings = [(vault_id, stack.enter_context(_KeyRing(owner))) for vault_id, owner in owners]
+            fits = 0
             expected: Optional[int] = 1
             previous = ""
             for number, (raw, digest, terminated) in enumerate(_lines(handle), start=1):
@@ -730,11 +848,20 @@ def _scan(
                         else "a line was edited, removed, inserted or moved"
                     )
                     problems.add(f"line {number} does not follow what is before it: {cause}")
-                try:
-                    events.append(_open_record(line, keys.get(line.kid), vault_id))
+                refusal: Optional[_BadLine] = None
+                for index in [fits] + [other for other in range(len(rings)) if other != fits]:
+                    vault_id, keys = rings[index]
+                    try:
+                        events.append(_open_record(line, keys.get(line.kid), vault_id))
+                    except _BadLine as exc:
+                        refusal = refusal or exc
+                        continue
                     count += 1
-                except _BadLine as exc:
-                    problems.add(f"line {number} {exc}")
+                    fits = index
+                    refusal = None
+                    break
+                if refusal is not None:
+                    problems.add(f"line {number} {refusal}")
                 expected, previous = line.seq + 1, digest
     except OSError as exc:
         raise AuditError(f"the audit log {target} could not be read ({_reason(exc)})") from None

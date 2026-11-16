@@ -199,7 +199,12 @@ class _Parser(argparse.ArgumentParser):
                 if guess is not None:
                     guesses.append((_printable(extra), guess))
         message = "unrecognized arguments: " + " ".join(_printable(extra) for extra in extras)
-        if len(guesses) == 1:
+        misplaced = [guess for extra, guess in guesses if extra.split("=", 1)[0] == guess]
+        if misplaced and len(misplaced) == len(guesses):
+            # They exist, and were written where this parser does not take them: before the command's name.
+            what = f"{misplaced[0]} is an option" if len(misplaced) == 1 else f"{', '.join(misplaced)} are options"
+            message += f"; {what} of the command: write {'it' if len(misplaced) == 1 else 'them'} after its name"
+        elif len(guesses) == 1:
             message += f"; did you mean {guesses[0][1]}?"
         elif guesses:
             message += "; did you mean " + ", ".join(f"{guess} (for {extra})" for extra, guess in guesses) + "?"

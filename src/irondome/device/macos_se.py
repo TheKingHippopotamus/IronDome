@@ -468,7 +468,7 @@ class SecureEnclaveBackend(DeviceBackend):
         except FileNotFoundError:
             raise HardwareError(
                 "the Secure Enclave key for this vault is not on this Mac. "
-                "Use your recovery key, or restore a portable backup."
+                "Use your recovery key (irondome recovery use), or restore a portable backup."
             ) from None
         except OSError as exc:
             raise HardwareError(f"cannot read the Secure Enclave key file: {exc.strerror or exc}") from None

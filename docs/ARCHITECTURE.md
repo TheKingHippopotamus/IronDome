@@ -106,6 +106,7 @@ sync of a vault never carries what binds it to the machine:
 ~/.irondome/                                   the vaults ($IRONDOME_HOME overrides)
   default-bunker                                set by `irondome bunker use`
   bunkers/alpha/vault.irondome, backups/, caps/, audit.log, config.json
+                audit-<time>.log                after a re-key: the log from before it
   bunkers/bravo/...
 
 ~/Library/Application Support/IronDome/device/  macOS; on Linux $XDG_STATE_HOME/irondome/device
@@ -209,7 +210,12 @@ entries are ordinary Python strings for as long as a command runs (see
 * **Audit log** — every use of a session or grant and every change, encrypted
   and hash-chained; `irondome audit --verify` detects an edited, inserted,
   reordered or removed line, but not the removal of the newest lines: nothing
-  outside the log records how long it should be.
+  outside the log records how long it should be. A re-key gives the vault a
+  new key, and the log's key comes from the vault key: the log is set aside
+  as `audit-<time>.log`, and the key that reads it (the old audit key, which
+  opens no entry) travels in the new vault's encrypted index, sealed under a
+  key of the new vault key, together with the keys of the logs before it.
+  `irondome audit --archive NAME` reads and checks such a log.
 
 ## Source map
 

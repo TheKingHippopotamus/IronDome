@@ -109,6 +109,8 @@ limited, attributable and revocable, within the limits listed below.
   until it expires; the audit log records each such use. To end a grant
   against such an agent, run `irondome rekey`, which destroys the device
   secret every grant is bound to, and rotate the secrets the grant covered.
+  The re-key sets the audit log aside and starts a new one; the record of
+  those uses stays readable with `irondome audit --archive NAME`.
 * A re-key (`rekey`, `recovery new`, `recovery remove`) first puts the new
   vault in place, then destroys what opened the old one: its device keys,
   snapshots, sessions and grants. It builds the new vault in a staging file
@@ -134,7 +136,35 @@ section 3), and a flag proves nothing: it can pass `--yes` or
 `--password-stdin` as easily as you. That is why every irreversible action
 needs a typed confirmation, a password typed at a hidden prompt, or the master
 password itself on stdin. A session token exported in that terminal is the one
-exception, by design: it is full access, so never let an agent inherit one.
+exception, by design: it is full access while it lasts, so never let an agent
+inherit one. Under a session alone IronDome's commands refuse to make a grant
+that would outlive it, and to set what agents may do with an entry: both ask
+for the master password again, and what a session does is recorded in the
+audit log as `session`. That stops accidents and tools that only run
+`irondome`. It is not a boundary: the token unwraps the vault key, so a
+program that holds it and uses its own code can do whatever the owner can,
+a grant that outlives the session included.
+
+**An agent, or anything else running as you, can lock you out for a while.**
+On a TPM the chip counts wrong master passwords, and it does not know who
+typed them: a process that holds only a grant can feed it wrong passwords
+until it enters lockout, and then it refuses the right one too until it
+forgives the failures. Nothing is read or changed that way. A TPM in
+lockout takes no new keyslot either, so the recovery key gets you in meanwhile
+only with a device key kept in a file
+(`IRONDOME_DEVICE_BACKEND=software irondome recovery use`, which the command
+itself suggests); `irondome rekey` moves the vault back onto the chip
+afterwards. Where the TPM's lockout authorisation is empty, as it is by
+default on most Linux machines, `tpm2_dictionarylockout --clear-lockout`
+resets the counter at once, for you and for anyone else who can use the TPM:
+`irondome doctor` says which it is.
+
+**`.env.irondome` is read without asking.** `irondome run` takes it from the
+directory the command runs in and says which variables it found there. The
+file names what the command receives, so in a directory someone else wrote (a
+cloned repository), read it before you run anything through `irondome run`
+with your master password or a session; a grant gives the command only what
+the grant covers.
 
 **Where this stops:** a process that receives a secret can leak it on
 purpose. An agent told to run `sh -c 'echo $TOKEN | rev'` will defeat output
@@ -164,6 +194,12 @@ A recovery key on paper is not reachable by `nuke`. If a copy of the vault
 file survives somewhere and the recovery key survives too, that copy opens.
 Neither is a portable backup made with `irondome export`: it needs no device
 secret and opens with its own password.
+
+The recovery key is used with `irondome recovery use`: put the vault file
+back where `irondome status` says it belongs, type the key, and choose a new
+master password, which is bound to the machine you are on. Every keyslot
+that needed the old device key or the old password is replaced; the recovery
+key itself stays valid until you replace it.
 
 `irondome recovery new` and `irondome recovery remove` re-key the vault, so
 the old recovery key opens neither the vault as it is now nor anything

@@ -226,7 +226,7 @@ _CODE_TEXT = re.compile(r"\(0x[0-9A-Fa-f]{1,8}\)")
 _LONG_HEX = re.compile(r"[0-9A-Fa-f]{32,}")
 _PROPERTY = re.compile(r"(\s*)([A-Za-z0-9_]+):\s*(?:(0[xX][0-9A-Fa-f]{1,16})|([0-9]{1,20}))?\s*")
 
-_RECOVERY_ADVICE = "Use your recovery key, or restore a portable backup."
+_RECOVERY_ADVICE = "Use your recovery key (irondome recovery use), or restore a portable backup."
 _NO_MEMFD = "this system cannot create in-memory files (memfd_create), which the TPM backend needs"
 _OWNER_AUTH_SET = (
     "the TPM has an owner password, and IronDome creates and deletes NV indices with an empty owner "

@@ -36,6 +36,7 @@ import stat
 import sys
 import textwrap
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from irondome import audit, caps, config, paths, scan, unlock
@@ -110,6 +111,27 @@ def _require_vault() -> None:
 def _open(ctx: Context, reason: str, *, fresh: bool = False) -> Vault:
     _require_vault()
     return ctx.open_vault(reason=reason, fresh=fresh)
+
+
+def _open_to_outlast(ctx: Context, reason: str, ttl: int) -> Vault:
+    """Open the vault to make something that lasts *ttl* seconds. A session cannot make what outlives it.
+
+    A session token stands for the person for a limited time, and anything that holds it can use
+    it. So a grant that would still work after the session has ended needs what the session was
+    started with: the master password or Touch ID, asked for afresh.
+    """
+    vault = _open(ctx, reason)
+    if ctx.unlocked_by != "session":
+        return vault
+    left = (ctx.session_expires or 0) - int(time.time())
+    if ttl <= left:
+        return vault
+    vault.close()
+    ctx.out.info(
+        f"This would outlast your session, which ends in {format_duration(max(left, 0))}: a session cannot "
+        "make that, so the vault is unlocked again."
+    )
+    return _open(ctx, reason, fresh=True)
 
 
 def _commit(ctx: Context, vault: Vault, action: str, *, target: str, detail: str) -> None:
@@ -338,8 +360,25 @@ def _env_file(ctx: Context, named: Optional[str], cwd: Optional[str]) -> Optiona
             return None
         text = _read_env_file(path, found=True)
     values = refs.parse_env_file(text)
-    ctx.out.info(f"using {scan.display_path(path)}")
+    if named is not None:
+        ctx.out.info(f"using {scan.display_path(path)}")
+        return values
+    # Nobody named this file: it was found where the command runs. Say what it supplies, so that a file
+    # someone else put in the directory cannot quietly decide what the command receives.
+    secret = sorted(name for name, value in values.items() if refs.is_reference(value))
+    plain = sorted(name for name in values if name not in secret)
+    parts = []
+    if secret:
+        parts.append(f"from the vault: {_listed(secret)}")
+    if plain:
+        parts.append(f"set as written: {_listed(plain)}")
+    ctx.out.info(f"using {scan.display_path(path)}, found in the working directory ({'; '.join(parts) or 'empty'})")
     return values
+
+
+def _listed(names: Sequence[str], limit: int = 8) -> str:
+    shown = ", ".join(_printable(name) for name in names[:limit])
+    return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
 
 
 def _started_path(found: str) -> str:
@@ -542,9 +581,12 @@ def _grant_create(ctx: Context, args: argparse.Namespace) -> int:
     if uses is not None and not 1 <= uses <= caps.MAX_USES:
         raise UsageError(f"a grant can be used from 1 to {caps.MAX_USES} times, or without a limit (--unlimited)")
     mode = caps.MODE_REVEAL if args.reveal else caps.MODE_USE
-    with _open(ctx, f"create a grant for {_spoken_list(references)}") as vault:
+    with _open_to_outlast(ctx, f"create a grant for {_spoken_list(references)}", ttl) as vault:
         covers = [_source(vault, reference)[2] for reference in references]
-        token, info = caps.create_grant(vault, references, mode=mode, ttl=ttl, uses=uses, label=args.label or "")
+        token, info = caps.create_grant(
+            vault, references, mode=mode, ttl=ttl, uses=uses, label=args.label or "",
+            actor="session" if ctx.unlocked_by == "session" else "owner",
+        )
     _report_grant(ctx, token, info, covers, "created")
     return 0
 
@@ -796,13 +838,30 @@ def _who(event: "audit.AuditEvent") -> str:
     return f"grant {event.kid[:12]}"
 
 
+def _archived_log(name: str) -> Path:
+    """The archived audit log *name* of this bunker: a file name as ``irondome audit`` lists it, or its path."""
+    wanted = Path(name).name
+    for path in audit.archives():
+        if path.name == wanted and (os.sep not in name or Path(name).resolve() == path.resolve()):
+            return path
+    known = ", ".join(path.name for path in audit.archives()) or "none"
+    raise NotFoundError(f"bunker {_bunker()} has no archived audit log named {wanted} (it has: {known})")
+
+
 def _audit(ctx: Context, args: argparse.Namespace) -> int:
     _require_owner(ctx, "reading the audit log")
     if args.count < 0:
         raise UsageError("-n takes the number of records to show: 1 or more, or 0 for all of them")
+    archived = _archived_log(args.archive) if args.archive is not None else None
     with _open(ctx, "read your IronDome audit log") as vault:
-        events = audit.read(vault, limit=args.count + 1 if args.count else None)
-        report = audit.verify(vault) if args.verify else None
+        events = audit.read(vault, limit=args.count + 1 if args.count else None, path=archived)
+        report = audit.verify(vault, path=archived) if args.verify else None
+        if archived is not None and report is None and not events and archived.stat().st_size:
+            raise VaultError(
+                f"no record in {archived.name} could be read with a key this vault holds: it was altered, it "
+                "belongs to another vault, or it was set aside before this vault kept what reads such logs. "
+                "--verify says what is wrong with each line"
+            )
     more = bool(args.count) and len(events) > args.count
     if more:
         events = events[1:]
@@ -833,6 +892,13 @@ def _audit(ctx: Context, args: argparse.Namespace) -> int:
                 ctx.out.data(f"ALTERED: the log fails verification ({found})")
                 for problem in report.problems:
                     ctx.out.data(f"  {problem}")
+    earlier = [] if archived is not None else audit.archives()
+    if earlier and not ctx.out.json_mode:
+        ctx.out.info(
+            f"{_plural(len(earlier), 'earlier log was', 'earlier logs were')} set aside by a re-key "
+            f"({', '.join(path.name for path in earlier[-3:])}{', ...' if len(earlier) > 3 else ''}). "
+            "Read one with: irondome audit --archive NAME"
+        )
     if not events:
         ctx.out.info(f"the audit log of bunker {_bunker()} is empty")
     elif more:
@@ -1167,7 +1233,8 @@ def _register_run(subparsers: Any, common: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--cwd", metavar="DIR", help="run the command in DIR")
     parser.add_argument(
-        "--timeout", metavar="DURATION", help="stop the command after DURATION (90s, 15m, 2h); exit status 124"
+        "--timeout", metavar="DURATION",
+        help="stop the command, and the processes it started, after DURATION (90s, 15m, 2h); exit status 124"
     )
     parser.add_argument(
         "command", nargs=argparse.REMAINDER, metavar="-- COMMAND [ARG...]", help="the command to run, after --"
@@ -1329,6 +1396,7 @@ def _register_audit(subparsers: Any, common: argparse.ArgumentParser) -> None:
                 ("irondome audit", f"the newest {_AUDIT_COUNT} records"),
                 ("irondome audit -n 0 --verify", "every record, each one checked"),
                 ("irondome audit -n 200 --json", "the newest 200, as JSON"),
+                ("irondome audit --archive NAME --verify", "a log from before a re-key"),
             ],
         ),
     )
@@ -1341,6 +1409,10 @@ def _register_audit(subparsers: Any, common: argparse.ArgumentParser) -> None:
         help=f"show the newest N records (default {_AUDIT_COUNT}; 0 shows all)",
     )
     parser.add_argument("--verify", action="store_true", help="check every line; exit status 1 if the log was altered")
+    parser.add_argument(
+        "--archive", metavar="NAME",
+        help="read a log that a re-key set aside (audit-<time>.log in the bunker's directory), not the current one",
+    )
     parser.set_defaults(handler=_audit)
 
 

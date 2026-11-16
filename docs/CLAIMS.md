@@ -13,7 +13,7 @@ Run the checks on your own machine with `irondome verify` (`irondome verify --cl
 | [`device-bound`](#device-bound) | A copy of the vault is useless without the machine | macOS, Linux | 12 | `device_bound` |
 | [`key-in-hardware`](#key-in-hardware) | On an Apple-silicon Mac or Linux with a TPM 2.0, the device secret is held by the security chip | macOS, Linux | 9 | `key_in_hardware` |
 | [`biometric-enforced-by-chip`](#biometric-enforced-by-chip) | Touch ID is enforced by the Secure Enclave, not by IronDome | macOS | 12 | `biometric_enforced` |
-| [`tpm-rate-limit`](#tpm-rate-limit) | On Linux the TPM checks the password and rate-limits guesses | Linux | 8 | test suite only |
+| [`tpm-rate-limit`](#tpm-rate-limit) | On Linux the TPM checks the password and rate-limits guesses | Linux | 9 | test suite only |
 | [`crypto-erase`](#crypto-erase) | nuke makes every copy of the vault unreadable | macOS, Linux | 13 | `crypto_erase` |
 | [`keys-wiped`](#keys-wiped) | Key material is wiped from memory | macOS, Linux | 34 | `keys_wiped` |
 | [`everything-encrypted`](#everything-encrypted) | Names, usernames, URLs and tags are encrypted, not just passwords | macOS, Linux | 7 | `everything_encrypted` |
@@ -24,11 +24,11 @@ Run the checks on your own machine with `irondome verify` (`irondome verify --cl
 | [`owner-only-files`](#owner-only-files) | Every file is owner-only and every write is atomic | macOS, Linux | 9 | `owner_only_files` |
 | [`grants-are-scoped`](#grants-are-scoped) | A grant opens only what it names, for as long as it says | macOS, Linux | 17 | `grants_are_scoped` |
 | [`grants-hold-no-keys`](#grants-hold-no-keys) | A grant never contains the vault key, the master password or an OTP seed | macOS, Linux | 8 | `grants_hold_no_keys` |
-| [`secrets-stay-out-of-transcripts`](#secrets-stay-out-of-transcripts) | Secrets used by an agent do not appear in its transcript | macOS, Linux | 9 | `masking` |
-| [`agents-cannot-escalate`](#agents-cannot-escalate) | An agent cannot widen its own access | macOS, Linux | 9 | test suite only |
-| [`audit-log`](#audit-log) | Every agent access is recorded, and edits to the record are detected | macOS, Linux | 17 | `audit_log` |
+| [`secrets-stay-out-of-transcripts`](#secrets-stay-out-of-transcripts) | Secrets used by an agent do not appear in its transcript | macOS, Linux | 13 | `masking` |
+| [`agents-cannot-escalate`](#agents-cannot-escalate) | An agent cannot widen its own access | macOS, Linux | 14 | test suite only |
+| [`audit-log`](#audit-log) | Every agent access is recorded, and edits to the record are detected | macOS, Linux | 22 | `audit_log` |
 | [`bunkers-isolated`](#bunkers-isolated) | Several bunkers on one machine, each sealed from the others | macOS, Linux | 9 | `bunkers_isolated` |
-| [`recovery`](#recovery) | The recovery key opens the vault without the device | macOS, Linux | 12 | `recovery` |
+| [`recovery`](#recovery) | The recovery key opens the vault without the device | macOS, Linux | 20 | `recovery` |
 | [`migration`](#migration) | A 3.x vault migrates completely, and the old vault is left alone | macOS, Linux | 9 | test suite only |
 | [`process-hardened`](#process-hardened) | No core dumps, and on Linux no debugger from your other programs | macOS, Linux | 6 | test suite only |
 | [`clipboard-cleared`](#clipboard-cleared) | A copied secret is taken off the clipboard | macOS, Linux | 9 | test suite only |
@@ -128,13 +128,13 @@ Tests (12):
 
 The TPM verifies a value derived from the master password before releasing the device secret, with dictionary-attack protection enabled on the NV index: a wrong password is refused by the chip, and repeated failures put the TPM into lockout.
 
-*Where it stops:* The lockout is the TPM's global dictionary-attack counter; its thresholds are set by the machine's TPM configuration, not by IronDome.
+*Where it stops:* The lockout is the TPM's global dictionary-attack counter; its thresholds are set by the machine's TPM configuration, not by IronDome. The counter does not know who is guessing: any program running as you, a process that holds only a grant included, can use up the allowance and lock the owner out until the TPM forgives the failures. A TPM in lockout takes no new keyslot either; `irondome recovery use` then names the way in with a file-based device key.
 
 - Platforms: Linux
 - Closes L1: 3.x: key protection was software-only (no TPM, no Secure Enclave).
 - On your machine: no check of its own; the test suite covers it
 
-Tests (8):
+Tests (9):
 
 - [`tests/claims/test_tpm_rate_limit.py::test_the_vaults_nv_index_has_dictionary_attack_protection`](../tests/claims/test_tpm_rate_limit.py)
 - [`tests/claims/test_tpm_rate_limit.py::test_a_wrong_master_password_is_refused_by_the_chip_and_counted`](../tests/claims/test_tpm_rate_limit.py)
@@ -144,6 +144,7 @@ Tests (8):
 - [`tests/unit/test_device_tpm.py::test_real_repeated_wrong_authorisation_ends_in_lockout`](../tests/unit/test_device_tpm.py)
 - [`tests/unit/test_device_tpm.py::test_real_wait_grows_with_the_failures_beyond_the_limit`](../tests/unit/test_device_tpm.py)
 - [`tests/unit/test_device_tpm.py::test_lockout_reaches_the_caller_of_unlock`](../tests/unit/test_device_tpm.py)
+- [`tests/claims/test_tpm_rate_limit.py::test_boundary_in_lockout_the_recovery_key_gets_the_owner_in_with_a_file_based_device_key`](../tests/claims/test_tpm_rate_limit.py)
 
 ## crypto-erase
 
@@ -273,7 +274,7 @@ Tests (10):
 
 Master passwords are stretched with Argon2id (by default 256 MiB, 3 passes and 4 lanes, and 64 MiB, RFC 9106's low-memory choice, on a machine with less than 3 GiB of RAM; never below the OWASP minimum), applied to a 32-byte HKDF-SHA256 prehash of the password and never to the password itself, keys are derived with HKDF-SHA256 and data is encrypted with AES-256-GCM using random 96-bit nonces. IronDome implements no primitive itself; all of them come from pyca/cryptography and are checked against published test vectors.
 
-*Where it stops:* No independent party has audited IronDome's use of these primitives. IRONDOME_KDF_MEMORY_MIB in the environment, or --kdf-memory-mib when a vault is made, replaces the default memory cost with any value from 19 MiB to 4 GiB.
+*Where it stops:* No independent party has audited IronDome's use of these primitives. IRONDOME_KDF_MEMORY_MIB in the environment, or --kdf-memory-mib when a vault is made, replaces the default memory cost with any value from 19 MiB to 4 GiB. `init`, `export` and `status` show the cost, and warn when it is below the default.
 
 - Platforms: macOS, Linux
 - Closes L5: 3.x: the cipher was AES-128-CBC (Fernet splits its 32-byte key into a 16-byte AES key and a 16-byte HMAC key).
@@ -425,14 +426,14 @@ Tests (8):
 
 **Secrets used by an agent do not appear in its transcript**
 
-`irondome run` places secrets in the child process's environment, masks them (and their base64, hex and percent-encoded forms) in everything the child prints, and never passes a session or grant token to the child. The MCP server returns names, exit codes and masked output, not secret values.
+`irondome run` places secrets in the child process's environment, masks them in everything the child prints (as they are, in base64, in hex, percent-encoded as the common encoders write it, HTML-escaped, as JSON and shell strings, and each line of a secret of several lines), and never passes a session or grant token to the child. The MCP server returns names, exit codes and masked output, not secret values.
 
-*Where it stops:* This prevents accidents, not intent: a command that deliberately transforms a secret before printing it defeats masking. A grant created with --reveal, or an entry marked `--agent reveal`, allows the value to be shown.
+*Where it stops:* This prevents accidents, not intent: a command that deliberately transforms a secret before printing it defeats masking, and so does an encoding that is not on the list (base64 wrapped at 76 columns, compression, another escaping style). A value shorter than 4 bytes is not masked, one shorter than 8 only as it is and not in its encodings, and a line of a secret of several lines only if it is one unbroken token of 20 bytes or more (a line of a key, not a line with spaces, and not the lines that open and close a PEM block); a short value is masked wherever those characters occur, which can show a reader where it is. A grant created with --reveal, or an entry marked `--agent reveal`, allows the value to be shown. With --timeout the command and the processes that descend from it are asked to stop, given three seconds, and killed; one that made itself a daemon is not found, and whatever a command leaves running keeps the values it was given. `irondome run` reads `.env.irondome` in the working directory without being asked and says which variables it takes from it: in a directory someone else wrote, that file decides what the command receives.
 
 - Platforms: macOS, Linux
 - On your machine: `irondome verify --claim secrets-stay-out-of-transcripts` (check `masking`)
 
-Tests (9):
+Tests (13):
 
 - [`tests/claims/test_secrets_stay_out_of_transcripts.py::test_run_masks_the_secret_and_its_encodings_in_everything_the_child_prints`](../tests/claims/test_secrets_stay_out_of_transcripts.py)
 - [`tests/claims/test_secrets_stay_out_of_transcripts.py::test_the_child_never_inherits_a_session_or_grant_token`](../tests/claims/test_secrets_stay_out_of_transcripts.py)
@@ -443,19 +444,23 @@ Tests (9):
 - [`tests/unit/test_runner.py::test_every_encoding_is_masked`](../tests/unit/test_runner.py)
 - [`tests/unit/test_runner.py::test_child_gets_the_secret_and_never_a_bearer_token`](../tests/unit/test_runner.py)
 - [`tests/e2e/test_mcp_e2e.py::test_run_with_secrets_injects_the_value_and_masks_it`](../tests/e2e/test_mcp_e2e.py)
+- [`tests/unit/test_runner.py::test_the_encodings_a_trial_by_hand_got_past_the_mask_are_masked`](../tests/unit/test_runner.py)
+- [`tests/unit/test_runner.py::test_timeout_stops_what_the_command_started_too`](../tests/unit/test_runner.py)
+- [`tests/unit/test_runner.py::test_only_a_line_that_is_one_unbroken_token_is_masked_by_itself`](../tests/unit/test_runner.py)
+- [`tests/unit/test_runner.py::test_a_time_limit_gives_what_the_command_started_the_same_time_to_stop`](../tests/unit/test_runner.py)
 
 ## agents-cannot-escalate
 
 **An agent cannot widen its own access**
 
-Without a terminal or the master password, IronDome refuses to create sessions, aliases or entries, to change keyslots, to export, and to read entries the owner has not marked for agents. The one thing an agent can ask for is a time-boxed, use-only grant for entries marked for agents (`irondome approve`), and only the owner's Touch ID creates it.
+Without a terminal or the master password, IronDome refuses to create sessions, aliases or entries, to change keyslots, to export, and to read entries the owner has not marked for agents. The one thing an agent can ask for is a time-boxed, use-only grant for entries marked for agents (`irondome approve`), and only the owner's Touch ID creates it. Under a session alone, IronDome's commands refuse to create a grant that would outlive the session and to set what agents may do with an entry: both ask for the master password again.
 
-*Where it stops:* A session token exported into an agent's environment is full access. Do not do that; use grants. A Touch ID prompt shows text chosen by the program that raised it: read it before you touch.
+*Where it stops:* A session token unwraps the vault key. Whatever holds one can do everything the owner can for as long as the session lasts: read, change and delete entries, and make grants that end when it does. What the commands refuse under a session stops accidents and tools that only run `irondome`; a program that uses the token with its own code is not bound by it and can make a grant that outlives the session. Never let an agent inherit one; use grants. What is done under a session is recorded in the audit log as `session`, not as `owner`. A Touch ID prompt shows text chosen by the program that raised it: read it before you touch. Anything that runs as you can type wrong master passwords: on a TPM, a few of them put the chip into lockout and the vault refuses its owner too until the TPM forgives them (a locked TPM takes no new keyslot either: the recovery key gets the owner in meanwhile with a file-based device key, `IRONDOME_DEVICE_BACKEND=software irondome recovery use`, and `irondome rekey` moves the vault back onto the chip afterwards).
 
 - Platforms: macOS, Linux
 - On your machine: no check of its own; the test suite covers it
 
-Tests (9):
+Tests (14):
 
 - [`tests/claims/test_agents_cannot_escalate.py::test_an_agent_with_a_grant_is_refused_every_owner_command`](../tests/claims/test_agents_cannot_escalate.py)
 - [`tests/claims/test_agents_cannot_escalate.py::test_without_a_grant_an_agent_cannot_read_anything_and_is_told_about_grants`](../tests/claims/test_agents_cannot_escalate.py)
@@ -466,19 +471,24 @@ Tests (9):
 - [`tests/claims/test_agents_cannot_escalate.py::test_boundary_the_password_on_stdin_is_the_owner`](../tests/claims/test_agents_cannot_escalate.py)
 - [`tests/e2e/test_cli_agent.py::test_approve_gives_an_agent_a_use_only_grant_after_one_touch`](../tests/e2e/test_cli_agent.py)
 - [`tests/e2e/test_cli_agent.py::test_an_entry_marked_deny_is_never_approved`](../tests/e2e/test_cli_agent.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_a_session_cannot_mint_a_grant_that_outlives_it`](../tests/e2e/test_cli_trial_findings.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_a_session_still_makes_a_grant_that_ends_before_it_does`](../tests/e2e/test_cli_trial_findings.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_a_session_cannot_change_what_agents_may_do_with_an_entry`](../tests/e2e/test_cli_trial_findings.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_a_session_cannot_add_an_entry_that_agents_may_see_either`](../tests/e2e/test_cli_trial_findings.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_what_a_session_does_is_recorded_as_done_by_a_session`](../tests/e2e/test_cli_trial_findings.py)
 
 ## audit-log
 
 **Every agent access is recorded, and edits to the record are detected**
 
-Each use of a grant, a session or a Touch ID approval, and every change to the vault, is appended to an encrypted, hash-chained log. `irondome audit --verify` detects edited, reordered, forged and removed lines.
+Each use of a grant, a session or a Touch ID approval, and every change to the vault, is appended to an encrypted, hash-chained log. `irondome audit --verify` detects edited, reordered, forged and removed lines. A re-key sets the log aside and starts a new one; the old one stays readable and checkable with `irondome audit --archive`.
 
-*Where it stops:* Deleting the newest lines of the log, or the whole log, is not detected, and a grant holder who can write the file can replace the newest lines with records of its own.
+*Where it stops:* Deleting the newest lines of the log, or the whole log, is not detected, and a grant holder who can write the file can replace the newest lines with records of its own. What reads an archived log is the audit key of the vault key it was written under; each re-key carries those keys forward in the new vault's encrypted index. A log archived by a vault that did not yet do so, or one from another vault, cannot be read.
 
 - Platforms: macOS, Linux
 - On your machine: `irondome verify --claim audit-log` (check `audit_log`)
 
-Tests (17):
+Tests (22):
 
 - [`tests/claims/test_audit_log.py::test_every_change_and_every_use_is_in_the_log_with_who_did_it`](../tests/claims/test_audit_log.py)
 - [`tests/claims/test_audit_log.py::test_the_log_is_encrypted`](../tests/claims/test_audit_log.py)
@@ -497,6 +507,11 @@ Tests (17):
 - [`tests/unit/test_audit.py::test_any_removal_that_is_not_just_the_newest_lines_is_caught`](../tests/unit/test_audit.py)
 - [`tests/unit/test_audit.py::test_a_line_forged_without_any_key_of_the_vault_is_caught`](../tests/unit/test_audit.py)
 - [`tests/unit/test_audit.py::test_removal_of_the_newest_lines_is_not_detected`](../tests/unit/test_audit.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_the_audit_log_from_before_a_rekey_can_still_be_read_and_checked`](../tests/e2e/test_cli_trial_findings.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_a_second_rekey_keeps_the_first_log_readable_and_an_edited_archive_is_detected`](../tests/e2e/test_cli_trial_findings.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_an_archived_log_no_kept_key_reads_is_refused_with_the_reason_and_verify_says_altered`](../tests/e2e/test_cli_trial_findings.py)
+- [`tests/e2e/test_cli_trial_findings.py::test_what_reads_an_archived_log_is_in_the_vault_and_nothing_is_written_beside_the_log`](../tests/e2e/test_cli_trial_findings.py)
+- [`tests/e2e/test_cli_rekey_interrupted.py::test_the_audit_history_survives_a_rekey_killed_after_the_switch`](../tests/e2e/test_cli_rekey_interrupted.py)
 
 ## bunkers-isolated
 
@@ -525,15 +540,21 @@ Tests (9):
 
 **The recovery key opens the vault without the device**
 
-A 160-bit recovery key, shown once at setup and stored nowhere, opens a copy of the vault on any machine, so a lost laptop, a dead chip or a changed fingerprint is not the end of your data.
+A 160-bit recovery key, shown once at setup and stored nowhere, opens a copy of the vault on any machine: `irondome recovery use` asks for it and gives the vault a new master password bound to that machine. A lost laptop, a dead chip, a changed fingerprint or a forgotten master password is not the end of your data.
 
-*Where it stops:* This is the same property that lets a recovery key outlive `nuke`. Keep it offline, or create the vault with --no-recovery. `irondome recovery new` and `irondome recovery remove` re-key the vault, so the old key opens neither the vault as it is now nor anything stored in it later; a copy of the vault file made before then still opens with the old key and shows what it held then.
+*Where it stops:* `irondome recovery use` is the one command that takes the key; it replaces every keyslot that needed the old device key or the old password, Touch ID keyslots included, and leaves the recovery key as it was. An old device key that is on the machine it runs on is destroyed, as `passwd` does, so another copy of the vault on that machine that still used it then opens only with the recovery key; one that is elsewhere, or cannot be reached, is left alone, and where it still exists the old master password still opens old copies of the vault file. This is the same property that lets a recovery key outlive `nuke`. Keep it offline, or create the vault with --no-recovery. `irondome recovery new` and `irondome recovery remove` re-key the vault, so the old key opens neither the vault as it is now nor anything stored in it later; a copy of the vault file made before then still opens with the old key and shows what it held then. On a machine whose TPM is in lockout, `irondome recovery use` cannot make a keyslot on the chip and says how to make a file-based one instead.
 
 - Platforms: macOS, Linux
 - On your machine: `irondome verify --claim recovery` (check `recovery`)
 
-Tests (12):
+Tests (20):
 
+- [`tests/claims/test_recovery.py::test_irondome_recovery_use_opens_a_copy_on_another_machine_and_sets_a_new_master_password`](../tests/claims/test_recovery.py)
+- [`tests/claims/test_recovery.py::test_irondome_recovery_use_takes_the_key_as_a_person_types_it_and_the_key_keeps_working`](../tests/claims/test_recovery.py)
+- [`tests/claims/test_recovery.py::test_irondome_recovery_use_after_a_forgotten_password_destroys_the_old_device_key`](../tests/claims/test_recovery.py)
+- [`tests/claims/test_recovery.py::test_irondome_recovery_use_with_a_wrong_key_changes_nothing`](../tests/claims/test_recovery.py)
+- [`tests/claims/test_recovery.py::test_irondome_recovery_use_is_not_for_a_process_with_no_terminal_and_no_piped_key`](../tests/claims/test_recovery.py)
+- [`tests/claims/test_recovery.py::test_boundary_irondome_recovery_use_says_so_when_the_vault_has_no_recovery_key`](../tests/claims/test_recovery.py)
 - [`tests/claims/test_recovery.py::test_the_recovery_key_opens_a_copy_of_the_vault_on_a_machine_without_the_device`](../tests/claims/test_recovery.py)
 - [`tests/claims/test_recovery.py::test_the_recovery_key_is_160_bits_written_as_eight_groups`](../tests/claims/test_recovery.py)
 - [`tests/claims/test_recovery.py::test_it_is_typed_forgivingly_lower_case_and_without_dashes`](../tests/claims/test_recovery.py)
@@ -546,6 +567,8 @@ Tests (12):
 - [`tests/claims/test_recovery.py::test_boundary_a_new_or_removed_recovery_key_re_keys_and_only_older_copies_open_with_the_old_one`](../tests/claims/test_recovery.py)
 - [`tests/unit/test_keys.py::test_a_recovery_slot_does_not_depend_on_the_device`](../tests/unit/test_keys.py)
 - [`tests/unit/test_keys.py::test_a_wrong_recovery_key_is_refused`](../tests/unit/test_keys.py)
+- [`tests/claims/test_tpm_rate_limit.py::test_boundary_in_lockout_the_recovery_key_gets_the_owner_in_with_a_file_based_device_key`](../tests/claims/test_tpm_rate_limit.py)
+- [`tests/claims/test_recovery.py::test_irondome_recovery_use_leaves_alone_a_device_key_that_is_not_on_this_machine`](../tests/claims/test_recovery.py)
 
 ## migration
 

@@ -138,6 +138,10 @@ def readable_vault(bunker: str) -> VaultFile:
             ) from None
 
 
+class _TryAgain(UsageError):
+    """A new master password that was too short, or typed two different ways: worth asking for again."""
+
+
 class Context:
     """Per-invocation state shared by every command.
 
@@ -161,7 +165,11 @@ class Context:
         self.touch = bool(getattr(args, "touch", False)) or os.environ.get(ENV_TOUCH) == "1"
         #: How the vault was opened by the last open_vault(): session, touch or password.
         self.unlocked_by: Optional[str] = None
+        #: When the session that opened the vault ends (Unix time), if a session did.
+        self.session_expires: Optional[int] = None
         self._asked_password = False
+        #: What the vault is being opened for, in words: shown before the master password is asked for.
+        self._purpose = ""
         self._rekey_noted = False
 
     # -- who is asking --------------------------------------------------------
@@ -301,8 +309,13 @@ class Context:
             )
         return read_secret(prompt, allow_empty=allow_empty)
 
-    def master_password(self) -> SecureBuffer:
-        """The current master password, in locked memory. The caller wipes it."""
+    def master_password(self, purpose: Optional[str] = None) -> SecureBuffer:
+        """The current master password, in locked memory. The caller wipes it.
+
+        *purpose* says, in words, what typing it will do (``create a grant for stripe``); without one,
+        what the vault is being opened for by :meth:`open_vault`. It is shown on the terminal itself,
+        as part of the prompt, with anything a terminal would act on escaped.
+        """
         self._asked_password = True
         if not self.password_stdin and not self.has_terminal:
             raise AuthError(
@@ -310,23 +323,48 @@ class Context:
                 "  For an agent or script: set IRONDOME_GRANT to a grant token (irondome grant create),\n"
                 "  or pass --touch on a Mac with Touch ID. For yourself: pipe it with --password-stdin."
             )
-        password = self.read_secret("Master password: ")
+        # The prompt is what stands between a program in this terminal and the vault: it says what typing
+        # the password will do, so that a person does not authorise something they did not ask for. It is
+        # written by the prompt itself, on the terminal: redirecting stderr, or --quiet, does not hide it.
+        said = purpose if purpose is not None else self._purpose
+        shown = "".join(char if char.isprintable() else repr(char)[1:-1] for char in said)[:200]
+        password = self.read_secret(f"To {shown}:\nMaster password: " if shown else "Master password: ")
         if password is None:
             raise AuthError("the master password cannot be empty")
         return password
 
     def new_master_password(self) -> SecureBuffer:
-        """A new master password, asked twice on a terminal. The caller wipes it."""
+        """A new master password, asked twice on a terminal. The caller wipes it.
+
+        At a terminal a password that is too short, or two entries that differ, are asked for again,
+        three times in all: a command that gave up at the first slip would leave whatever the person
+        typed next, often the password once more, to be read by the shell as a command.
+        """
+        attempts = 1 if self.password_stdin or not self.has_terminal else 3
+        while True:
+            attempts -= 1
+            try:
+                return self._new_master_password_once()
+            except _TryAgain as exc:
+                if attempts <= 0:
+                    raise UsageError(str(exc)) from None
+                self.out.error(f"{exc}. Try again.")
+
+    def _new_master_password_once(self) -> SecureBuffer:
+        """One try. :class:`_TryAgain` for a slip of the fingers; anything else (input closed) ends it."""
         first = self.read_secret("New master password: ")
         if first is None:
-            raise UsageError("the master password cannot be empty")
+            raise _TryAgain("the master password cannot be empty")
         try:
-            check_new_password(first)
+            try:
+                check_new_password(first)
+            except UsageError as exc:
+                raise _TryAgain(str(exc)) from None
             if not self.password_stdin:
                 second = self.read_secret("Repeat it: ")
                 try:
                     if second is None or not hmac.compare_digest(first.view(), second.view()):
-                        raise UsageError("the two entries do not match")
+                        raise _TryAgain("the two entries do not match")
                 finally:
                     if second is not None:
                         second.wipe()
@@ -346,6 +384,7 @@ class Context:
         file = VaultFile.load()
         self.unlocked_by = None
         self._asked_password = False
+        self._purpose = reason
         token = _token(ENV_SESSION)
         if token and not fresh:
             try:
@@ -356,6 +395,7 @@ class Context:
                 self.out.warn(f"ignoring {ENV_SESSION}: {exc}")
             else:
                 self.unlocked_by = "session"
+                self.session_expires = caps.session_expires(token)
                 return self._opened(Vault(file, vault_key))
 
         supplied: Optional[SecureBuffer] = self.master_password() if self.password_stdin else None
@@ -526,8 +566,13 @@ class Context:
     # -- audit ----------------------------------------------------------------
 
     def audit(self, vault: Vault, action: str, *, target: str = "", detail: str = "", ok: bool = True) -> None:
-        """Record an owner-side event. A failing audit log is a warning, not a failed command."""
-        actor = "agent" if self.agent_mode else "owner"
+        """Record an owner-side event. A failing audit log is a warning, not a failed command.
+
+        Who did it is what proved them: ``session`` when a session token opened the vault for this
+        command, since anything that holds the token could have run it, and ``owner`` only when the
+        master password or Touch ID did.
+        """
+        actor = "agent" if self.agent_mode else ("session" if self.unlocked_by == "session" else "owner")
         try:
             with audit.owner_key(vault) as key:
                 audit.record(

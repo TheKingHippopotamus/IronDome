@@ -577,7 +577,9 @@ def _describe(bunker: str, descriptor: Dict[str, Any]) -> DeviceKey:
         present = backend.exists(descriptor)
     except Exception:  # a backend that cannot be asked is reported as absent; execute reports why
         present = False
-    return DeviceKey(bunker=bunker, backend=name, policy=policy, hardware=backend.hardware, present=present)
+    return DeviceKey(
+        bunker=bunker, backend=name, policy=policy, hardware=devices.hardware_here(backend), present=present
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -770,7 +772,7 @@ def _destroy(bunker: str, descriptor: Dict[str, Any], report: NukeReport, hardwa
         report.errors.append(f"{bunker}: a device key ({_label(descriptor)}) could not be destroyed: {exc}")
         return
     report.device_keys_destroyed += 1
-    hardware.append(backend.hardware)
+    hardware.append(devices.hardware_here(backend))
 
 
 def _stray_key_files(directory: Path) -> bool:
@@ -821,7 +823,8 @@ def _destroy_device_secrets(
             report.errors.append(f"{bunker}: {name}: {exc}")
             continue
         report.device_keys_destroyed += count
-        hardware.extend([backend.hardware] * count)
+        if count:  # asking a backend what it is can mean running its tools: only when it held something
+            hardware.extend([devices.hardware_here(backend)] * count)
 
 
 def _rmdir(directory: Path) -> None:

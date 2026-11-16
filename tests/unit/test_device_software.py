@@ -836,3 +836,41 @@ def test_probe_all_on_this_machine_includes_the_file_backend():
 def test_fakes_do_not_leak_into_the_real_registry():
     assert [name for name, _, _ in device._REGISTRY] == ["macos-se", "linux-tpm2", "software"]
     assert all(not isinstance(backend, Fake) for backend in device._instances.values())
+
+
+def test_whether_a_backend_is_hardware_is_asked_of_this_machine_and_not_of_the_class() -> None:
+    """A TPM 2.0 simulator is reached through the TPM backend, and is software.
+
+    ``status`` once said "hardware" and ``nuke`` "security chip" where ``init`` and ``doctor`` said "software,
+    not a security chip": they read the class, the others the probe. They all ask this one function now.
+    """
+    from irondome import device as devices
+    from irondome.device.base import Probe
+
+    class Simulated:
+        name = "linux-tpm2"
+        hardware = True
+
+        def probe(self) -> Probe:
+            return Probe(self.name, True, False, False, "TPM 2.0 simulator: software, not a security chip")
+
+    class Chip(Simulated):
+        def probe(self) -> Probe:
+            return Probe(self.name, True, True, False, "TPM 2.0")
+
+    class Unreachable(Simulated):
+        def probe(self) -> Probe:
+            raise HardwareError("the TPM does not answer")
+
+    class Passive(Simulated):
+        def probe(self) -> Probe:
+            raise AssertionError("status must compile and create nothing: the passive probe is the one to ask")
+
+        def passive_probe(self) -> Probe:
+            return Probe(self.name, True, False, False, "simulator")
+
+    assert devices.hardware_here(Simulated()) is False  # type: ignore[arg-type]
+    assert devices.hardware_here(Chip()) is True  # type: ignore[arg-type]
+    assert devices.hardware_here(Unreachable()) is True  # type: ignore[arg-type]
+    assert devices.hardware_here(Passive()) is False  # type: ignore[arg-type]
+    assert devices.hardware_here(devices.get_backend("software")) is False

@@ -250,6 +250,21 @@ def assert_erased(made: Made) -> None:
     assert recovered(made) == made.value, "the documented exception: a recovery key needs no device"
 
 
+@pytest.mark.parametrize("a_chip_here", [False, True])
+def test_nuke_asks_the_machine_whether_the_keys_it_destroyed_were_in_a_chip(tmp_path, monkeypatch, a_chip_here):
+    """What nuke says about the keys it destroyed comes from the backend's probe of this machine.
+
+    A TPM 2.0 simulator is reached through the TPM backend, whose class says "hardware": nuke called its keys
+    "held by a security chip" while init and doctor said "software, not a security chip".
+    """
+    from irondome import device as devices
+
+    monkeypatch.setattr(type(devices.get_backend("software")), "hardware", True)  # what the class is for
+    monkeypatch.setattr(devices, "hardware_here", lambda backend: a_chip_here)  # what is behind it here
+    _made, report, _device_side = prove_erasure(tmp_path)
+    assert report.device_keys_destroyed >= 1 and report.hardware_backed is a_chip_here
+
+
 def test_after_nuke_a_restored_vault_side_opens_with_the_recovery_key_only(tmp_path):
     made, report, _device_side = prove_erasure(tmp_path)
 
@@ -286,7 +301,9 @@ def test_on_the_tpm_nothing_restored_opens_not_even_with_the_device_directory(fa
 @pytest.mark.tpm
 def test_real_tpm_nothing_restored_opens_not_even_with_the_device_directory(chip, tmp_path):
     made, report, device_side = prove_erasure(tmp_path)
-    assert report.hardware_backed is True
+    # What nuke says of the keys it destroyed is what the TPM's probe says of this machine. Against a
+    # simulator that is "software": it used to say "security chip" here while init said the opposite.
+    assert report.hardware_backed is device.hardware_here(chip)
 
     restore(device_side, paths.device_root())
 

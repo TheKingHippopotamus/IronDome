@@ -66,7 +66,9 @@ def test_a_planted_secret_is_found_in_plain_base64_and_hex_with_its_line(tmp_pat
 def test_every_encoding_the_masker_knows_is_found(tmp_path: Path) -> None:
     """The scanner looks for exactly what `irondome run` masks, and labels each the same way."""
     forms = secret_patterns(BANK.value)
-    assert {label for label, _ in forms} == {"plain", "base64", "base64url", "hex", "percent", "json", "shell", "repr"}
+    assert {label for label, _ in forms} == {
+        "plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr"
+    }
     write(tmp_path / "leaks.txt", b"".join(b"<" + pattern + b">\n" for _, pattern in forms))
 
     hits = scan_paths([tmp_path], [BANK]).hits

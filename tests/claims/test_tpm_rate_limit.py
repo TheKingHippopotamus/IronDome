@@ -103,3 +103,35 @@ def test_boundary_the_thresholds_are_the_tpms_own_global_counter(chip, make_vaul
     assert chip.lockout_status()["failed_tries"] == start + 2
     status = tpm2("tpm2_getcap", "properties-variable")
     assert "TPM2_PT_MAX_AUTH_FAIL" in status.stdout + tpm2("tpm2_getcap", "properties-fixed").stdout
+
+
+def test_boundary_in_lockout_the_recovery_key_gets_the_owner_in_with_a_file_based_device_key(chip, cli):
+    """A TPM in lockout takes no new keyslot, so ``recovery use`` says how to make one that is not on the chip.
+
+    Found in a lab, by using it: the texts said the recovery key still opened the vault during a lockout, and
+    the command that takes the key failed with the same lockout message, and no way out. It still cannot put
+    a keyslot on a chip that is refusing; it changes nothing, names the way in, and that way works.
+    """
+    from support.claimkit import add, document, init
+
+    created = init(cli)
+    add(cli, "bank", "the-bank-password-5678")
+    for attempt in range(chip.lockout_status()["max_tries"]):
+        assert cli("get", "bank", "--password-stdin", stdin=f"guess number {attempt}\n").returncode != 0
+    assert chip.lockout_status()["in_lockout"]
+    locked = cli("get", "bank", "--password-stdin", stdin=PASSWORD + "\n")
+    assert locked.returncode != 0 and "refusing password attempts" in locked.stderr
+    typed = f"{created['recovery_key']}\na new master password 2\n"
+    before = document(cli("auth", "show", "--json"))["keyslots"]
+    refused = cli("recovery", "use", "--password-stdin", stdin=typed)
+    assert refused.returncode != 0 and "nothing was changed" in refused.stderr
+    assert "IRONDOME_DEVICE_BACKEND=software irondome recovery use" in refused.stderr
+    assert document(cli("auth", "show", "--json"))["keyslots"] == before
+    env = {"IRONDOME_DEVICE_BACKEND": "software"}
+    said = cli("recovery", "use", "--password-stdin", stdin=typed, env=env)
+    assert said.returncode == 0, said.stderr
+    assert "irondome rekey" in said.stderr
+    shown = cli("get", "bank", "--password-stdin", stdin="a new master password 2\n")
+    assert shown.returncode == 0 and shown.stdout.strip() == "the-bank-password-5678"
+    slots = document(cli("auth", "show", "--json"))["keyslots"]
+    assert sorted((slot["kind"], slot["backend"]) for slot in slots) == [("password", "software"), ("recovery", None)]

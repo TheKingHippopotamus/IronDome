@@ -210,11 +210,25 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   the allocator and is not a guarantee; whoever reads a prehash that was left
   can test guesses of the password against it.
 * **Masking stops accidents, not intent.** A command that transforms a secret
-  on purpose gets it through, and a `--reveal` grant or an entry marked
-  `--agent reveal` lets an agent see the value.
+  on purpose gets it through, as does an encoding that is not on the list;
+  a `--reveal` grant or an entry marked `--agent reveal` lets an agent see
+  the value. `irondome run` reads `.env.irondome` in the directory it runs
+  in without being asked: in a directory someone else wrote, read that file
+  first.
 * **Grant and session tokens are bearer secrets.** Whoever holds one, and can
   read its file, has what it grants; a session token in an agent's
-  environment is full access.
+  environment is full access while the session lasts: it unwraps the vault
+  key. Under a session IronDome's commands will not make a grant that
+  outlives it or set what agents may do with an entry without the master
+  password again; a program that uses the token with its own code is not
+  bound by that.
+* **Anything running as you can lock you out for a while.** On a TPM, a few
+  wrong master passwords put the chip into lockout, whoever typed them; the
+  vault then refuses the right password too until the TPM forgives them.
+  A locked TPM takes no new keyslot either, so the recovery key gets you in
+  meanwhile only with a file-based device key
+  (`IRONDOME_DEVICE_BACKEND=software irondome recovery use`); `irondome
+  rekey` moves the vault back onto the chip afterwards.
 * **Revoking a grant, and its use count, rest on deleting its file.** A
   process that can write the bunker's `caps/` directory can put a copy back,
   and the grant works again until it expires. `irondome rekey` ends that: it

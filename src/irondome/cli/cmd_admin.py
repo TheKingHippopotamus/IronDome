@@ -40,6 +40,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tupl
 
 from irondome import audit, caps, config, doctor, interop, keys, migrate_v3, nuke, otp, paths
 from irondome import device as devices
+from irondome.cli.cmd_vault import warn_if_cheap
 from irondome.cli.context import Context, readable_vault
 from irondome.cli.output import format_time
 from irondome.crypto import Argon2Params, default_argon2
@@ -383,12 +384,12 @@ def _unlock_file(
     captured: List[SecureBuffer] = []
 
     def source() -> SecureBuffer:
-        password = ctx.master_password()
+        password = ctx.master_password(reason)
         if keep_password:
             captured.append(password.copy())
         return password
 
-    supplied = ctx.master_password() if ctx.password_stdin else None
+    supplied = ctx.master_password(reason) if ctx.password_stdin else None
     may_touch = not ctx.no_touch and (ctx.has_terminal or ctx.touch)
     try:
         vault_key = unlock(
@@ -732,6 +733,7 @@ def _export_portable(ctx: Context, vault: Vault, target: Path, bunker: str, *, w
             f"that password is {strength.label} for a file anyone who gets it can try to guess offline; "
             "consider exporting again with a long passphrase (irondome gen --words 6 makes one)"
         )
+    warn_if_cheap(ctx, default_argon2(), "this backup")
     if ctx.out.json_mode:
         ctx.out.json(
             {"bunker": bunker, "path": str(target), "format": interop.FORMAT_IRONDOME, "encrypted": True,
@@ -1475,7 +1477,7 @@ def _rekey_password(ctx: Context, old: Vault, captured: Optional[SecureBuffer]) 
         return captured  # it is what just opened the vault
     if captured is None:
         ctx.out.info("The vault opened without the master password; it is needed once more for its password keyslot.")
-        captured = ctx.master_password()
+        captured = ctx.master_password("make the vault's new password keyslot")
     try:
         for slot in slots:
             keys.open_slot(
@@ -1674,6 +1676,11 @@ def _rekey(old: Vault, password: Optional[SecureBuffer]) -> Tuple[Vault, List[st
             # plan destroys: the new vault gets a new one with its first session or grant.
             old.copy_into(fresh)
             fresh.meta[_REKEY_PLAN] = _retirement_plan(old)
+            # The audit log is sealed under a key of the old vault key. What reads it, and what reads the
+            # logs of the vault keys before, travels in the new vault's encrypted index from the switch on.
+            # Losing that costs the history, never the re-key.
+            with contextlib.suppress(Exception):
+                audit.carry_keys(old, fresh)
             fresh.commit(snapshots=0)
             data = paths.read_file(staging)
             current = VaultFile.load()
@@ -1890,9 +1897,8 @@ def _show_rekey(ctx: Context, bunker: str, count: int, slots: List[Dict[str, Any
     )
     if outcome["audit_archive"]:
         ctx.out.info(
-            f"The audit log was archived as {outcome['audit_archive']}. Its records were sealed under a key derived "
-            "from the old vault key, so they can no longer be verified against the new one; keep the file if you "
-            "want the history."
+            f"The audit log was archived as {outcome['audit_archive']}. Read or check it with: "
+            f"irondome audit --archive {Path(outcome['audit_archive']).name}"
         )
     ctx.out.info("Portable backups made with `irondome export` are not affected: they open with their own password.")
 
@@ -2043,7 +2049,8 @@ def _show_nuked(ctx: Context, report: nuke.NukeReport, legacy: Optional[Dict[str
     how = (
         "all held by a security chip"
         if report.hardware_backed
-        else "files: overwritten and unlinked, which on an SSD is best effort"
+        else "not all held by a security chip: a file is overwritten and unlinked, which on an SSD is best "
+        "effort, and a software TPM forgets a key only as well as its own storage does"
     )
     rows = [
         ("bunkers destroyed", ", ".join(report.bunkers) or "none"),

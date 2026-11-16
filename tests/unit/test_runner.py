@@ -7,9 +7,11 @@ the suite has to pass on a loaded machine without becoming meaningless.
 from __future__ import annotations
 
 import base64
+import html
 import json
 import os
 import pickle
+import re
 import select
 import shlex
 import shutil
@@ -204,16 +206,81 @@ def test_patterns_are_what_standard_encoders_produce(value: str) -> None:
         "percent": [
             urllib.parse.quote(value, safe="").encode(),
             urllib.parse.quote_plus(value, safe="").encode(),
-            urllib.parse.quote(value, safe="!*'()").encode(),
+            urllib.parse.quote(value, safe="!*'()").encode(),  # JavaScript's encodeURIComponent
+            urllib.parse.quote(value).encode(),  # Python's default leaves "/" alone
+            urllib.parse.quote(value, safe="!*'();/?:@&=+$,#").encode(),  # JavaScript's encodeURI
+            lower_escapes(urllib.parse.quote(value, safe="")),
+            lower_escapes(urllib.parse.quote(value)),
+            lower_escapes(urllib.parse.quote_plus(value, safe="")),
         ],
-        "json": [json.dumps(value)[1:-1].encode(), json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8")],
+        "html": [
+            html.escape(value).encode("utf-8"),
+            html.escape(value, quote=False).encode("utf-8"),
+            html.escape(value).replace("&#x27;", "&#39;").encode("utf-8"),
+        ],
+        "json": [
+            json.dumps(value)[1:-1].encode(),
+            json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8"),
+            json.dumps(json.dumps(value))[1:-1].encode()[2:-2],  # inside a JSON document carried as a string
+        ],
         # shlex.quote puts single quotes around anything that needs them and nothing around the rest.
         "shell": [shlex.quote(value).encode() if shlex.quote(value) == value else shlex.quote(value)[1:-1].encode()],
     }
     for label, encodings in expected.items():
         for encoded in encodings:
             assert encoded in patterns, (label, encoded)
-    assert {label for label, _ in forms} <= {"plain", "base64", "base64url", "hex", "percent", "json", "shell", "repr"}
+    assert {label for label, _ in forms} <= {
+        "plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr", "line"
+    }
+    lines = [line.strip() for line in raw.splitlines()]
+    for line in lines if len(lines) > 1 else []:
+        assert (line in patterns) == (runner._is_secret_line(line) or line == raw), line
+
+
+def lower_escapes(encoded: str) -> bytes:
+    """A percent-encoded text with the hex digits of its escapes in lower case, as some encoders write them."""
+    return re.sub(r"%[0-9A-F]{2}", lambda escape: escape.group(0).lower(), encoded).encode()
+
+
+@pytest.mark.parametrize(
+    ("printed", "how"),
+    [
+        (lambda value: urllib.parse.quote(value, safe="!*'();/?:@&=+$,#"), "JavaScript's encodeURI"),
+        (lambda value: urllib.parse.quote(value), "Python's quote as called without arguments"),
+        (lambda value: lower_escapes(urllib.parse.quote(value, safe="")).decode(), "lower-case escapes"),
+        (lambda value: html.escape(value), "an HTML page"),
+        (lambda value: html.escape(value).replace("&quot;", "&#34;").replace("&#x27;", "&#39;"), "Go and Jinja"),
+        (lambda value: html.escape(value).replace("&#x27;", "&#039;"), "PHP's HTML"),
+        (lambda value: html.escape(value, quote=False).replace('"', "&quot;"), "HTML, the double quote only"),
+        (lambda value: html.escape(value).replace("&#x27;", "&apos;"), "XML"),
+        (lambda value: urllib.parse.quote_plus(value, safe="*").replace("~", "%7E"), "a form as browsers send it"),
+        (lambda value: lower_escapes(urllib.parse.quote(value, safe="!*'()")).decode(), "encodeURIComponent, lower"),
+        (lambda value: lower_escapes(urllib.parse.quote(value, safe="!*'();/?:@&=+$,#")).decode(), "encodeURI, lower"),
+        (lambda value: json.dumps({"body": json.dumps({"password": value})}), "JSON inside JSON"),
+        (lambda value: "".join(f"12:00:01 app | {line}\n" for line in value.splitlines()), "a logger's prefix"),
+    ],
+)
+def test_the_encodings_a_trial_by_hand_got_past_the_mask_are_masked(printed, how: str) -> None:
+    """Each of these printed a generated password, or a private key, in full before release.
+
+    The claim said "percent-encoded forms" and the list held three of them; a
+    person using ``irondome run`` with ordinary tools found the rest. The
+    values are the kinds the trial used: one with the symbols a generated
+    password has, and one of several lines.
+    """
+    for value in (
+        "%bnLe1sj#ttArjwbT%G3/x&<'\">~*",
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n"
+        "VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu\n-----END PRIVATE KEY-----",
+    ):
+        if how == "a logger's prefix" and "\n" not in value:
+            continue
+        masker = Masker({"TOKEN": value})
+        text = printed(value)
+        shown = (masker.feed(f"before {text} after".encode()) + masker.flush()).decode()
+        assert "[irondome:TOKEN]" in shown, how
+        for piece in ("bnLe1sj", "ttArjwbT", "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7", "VJTUt9Us8cKj"):
+            assert piece not in shown, (how, piece)
 
 
 @pytest.mark.parametrize(
@@ -253,13 +320,16 @@ def test_a_pattern_is_labelled_by_the_first_encoding_that_produces_it() -> None:
     assert forms[b"YWJjZGVmZ2hp"] == "base64"  # also its URL-safe form, and it needs no padding
     assert forms[b"616263646566676869"] == "hex"  # no letters: upper and lower case are the same
     assert sorted(set(forms.values())) == ["base64", "hex", "plain"]
-    order = ["plain", "base64", "base64url", "hex", "percent", "json", "shell", "repr"]
+    order = ["plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr", "line"]
     labels = [label for label, _ in secret_patterns("a+b/c d\"e?fé")]
     assert labels == sorted(labels, key=order.index)
-    assert set(labels) == {"plain", "base64", "base64url", "hex", "percent", "json"}
+    assert set(labels) == {"plain", "base64", "base64url", "hex", "percent", "html", "json"}
     labels = [label for label, _ in secret_patterns("a+b/c d\"e?fé $1 it's \\")]
     assert labels == sorted(labels, key=order.index)
-    assert set(labels) == set(order)
+    assert set(labels) == set(order) - {"line"}
+    labels = [label for label, _ in secret_patterns("first-line-of-a-longer-value\nits-second-line-as-long-as-it")]
+    assert labels == sorted(labels, key=order.index) and labels.count("line") == 2
+    assert "line" not in [label for label, _ in secret_patterns("a line with spaces in it\nand another like it too")]
 
 
 def test_patterns_reject_what_is_not_text() -> None:
@@ -1076,13 +1146,17 @@ def test_working_directory(tmp_path: Path) -> None:
 
 @pytest.fixture
 def spawned(monkeypatch: pytest.MonkeyPatch) -> List[subprocess.Popen]:
-    """Every process the runner starts during the test, so its fate can be checked afterwards."""
+    """Every command the runner starts during the test, so its fate can be checked afterwards.
+
+    Not the ``ps`` it runs to read the process table before it stops a command (macOS has no /proc).
+    """
     started: List[subprocess.Popen] = []
 
     class Recording(subprocess.Popen):  # type: ignore[type-arg]
         def __init__(self, *args: object, **kwargs: object) -> None:
             super().__init__(*args, **kwargs)  # type: ignore[call-overload]
-            started.append(self)
+            if not (args and isinstance(args[0], list) and args[0][:1] == ["/bin/ps"]):
+                started.append(self)
 
     monkeypatch.setattr(runner.subprocess, "Popen", Recording)
     return started
@@ -1101,6 +1175,145 @@ def test_timeout_stops_the_child_and_raises(mask: bool, spawned: List[subprocess
     assert "0.5 seconds" in str(caught.value) and SECRET not in str(caught.value)
     (process,) = spawned
     assert process.returncode == -signal.SIGTERM, "the child was asked to stop, complied, and was reaped"
+
+
+@posix_only
+@pytest.mark.parametrize("mask", [True, False])
+@pytest.mark.skipif(
+    not os.path.isdir("/proc/self") and not os.path.exists("/bin/ps"), reason="no process table to read here"
+)
+def test_timeout_stops_what_the_command_started_too(mask: bool, tmp_path: Path) -> None:
+    """A time limit must not leave programs running that hold the injected value.
+
+    The command starts one program in the background, one in a session of its
+    own and one in the foreground, each holding the secret in its environment.
+    All of them descend from the command when the limit passes, and all of
+    them are stopped. (Found by a trial by hand before release: only the
+    command itself was stopped, and three processes kept the value.)
+    """
+    family = python(
+        """
+        import os, subprocess, sys, time
+        where = sys.argv[1]
+        sleeper = "import os,sys,time; open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(600)"
+        own = "import os,sys,time; os.setsid(); open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(600)"
+        subprocess.Popen([sys.executable, "-c", sleeper, where + "/background"])
+        subprocess.Popen([sys.executable, "-c", own, where + "/own-session"])
+        subprocess.Popen([sys.executable, "-c", sleeper, where + "/foreground"]).wait()
+        """,
+        str(tmp_path),
+    )
+    names = ("background", "own-session", "foreground")
+    try:
+        with pytest.raises(CommandTimeoutError):
+            run_command(family, {"TOKEN": SECRET}, mask=mask, timeout=3.0)
+        pids = [int((tmp_path / name).read_text()) for name in names]
+        deadline = time.monotonic() + PATIENCE
+        while time.monotonic() < deadline and any(_running(pid) for pid in pids):
+            time.sleep(0.05)
+        assert [name for name, pid in zip(names, pids) if _running(pid)] == []
+    finally:
+        for name in names:
+            try:
+                os.kill(int((tmp_path / name).read_text()), signal.SIGKILL)
+            except (OSError, ValueError):
+                pass
+
+
+def _running(pid: int) -> bool:
+    """True while *pid* is a live process (a zombie waiting to be reaped is not)."""
+    shown = subprocess.run(["/bin/ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True, check=False)
+    return bool(shown.stdout.strip()) and not shown.stdout.strip().startswith("Z")
+
+
+def test_only_a_line_that_is_one_unbroken_token_is_masked_by_itself() -> None:
+    """Each line of a key is a pattern; the lines every key and every config file share are not.
+
+    A review found that the first version masked ``-----BEGIN PRIVATE KEY-----`` in the output of commands
+    that had nothing to do with the value, and ``"type": "service_account",`` wherever it appeared.
+    """
+    pem = (
+        "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7\n"
+        "VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu\n-----END PRIVATE KEY-----\n"
+    )
+    account = (
+        '{\n  "type": "service_account",\n  "token_uri": "https://oauth2.googleapis.com/token",\n'
+        '  "private_key_id": "0123456789abcdef0123456789abcdef01234567"\n}\n'
+    )
+    lines = [pattern for label, pattern in secret_patterns(pem) if label == "line"]
+    assert lines == [
+        b"MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7",
+        b"VJTUt9Us8cKjMzEfYyjiWA4R4/M2bS1GB4t7NXp98C3SC6dVMvDu",
+    ]
+    assert [pattern for label, pattern in secret_patterns(account) if label == "line"] == []
+    masker = Masker({"TLS_KEY": pem, "ACCOUNT": account})
+    other = (
+        "-----BEGIN PRIVATE KEY-----\nAAAAsomeoneElsesKeyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\n"
+        '-----END PRIVATE KEY-----\n"type": "service_account",\n'
+    )
+    assert (masker.feed(other.encode()) + masker.flush()).decode() == other
+
+
+CHILD_THAT_TIDIES_UP = """
+import os, signal, sys, time
+def stop(*_):
+    time.sleep(0.4)
+    open(sys.argv[1] + "/tidied", "w").write("yes")
+    os._exit(0)
+signal.signal(signal.SIGTERM, stop)
+open(sys.argv[1] + "/ready", "w").write(str(os.getpid()))
+time.sleep(600)
+"""
+
+
+@posix_only
+def test_a_time_limit_gives_what_the_command_started_the_same_time_to_stop(tmp_path: Path) -> None:
+    """The command stops at once; its child needs a moment to finish what it is writing, and gets it."""
+    (tmp_path / "child.py").write_text(CHILD_THAT_TIDIES_UP)
+    family = python(
+        """
+        import os, subprocess, sys, time
+        subprocess.Popen([sys.executable, sys.argv[1] + "/child.py", sys.argv[1]])
+        while not os.path.exists(sys.argv[1] + "/ready"):
+            time.sleep(0.02)
+        time.sleep(600)
+        """,
+        str(tmp_path),
+    )
+    try:
+        with pytest.raises(CommandTimeoutError):
+            run_command(family, {"TOKEN": SECRET}, timeout=3.0)
+        assert (tmp_path / "tidied").exists(), "the child was killed before it had its grace"
+    finally:
+        try:
+            os.kill(int((tmp_path / "ready").read_text()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+
+
+@posix_only
+def test_the_descendants_of_a_process_are_found_however_they_are_named(tmp_path: Path) -> None:
+    child = subprocess.Popen(
+        [sys.executable, "-c",
+         # On Linux the name is what /proc/<pid>/stat puts between brackets: one made to look like the
+         # fields that follow it must not confuse the reading of the parent's pid.
+         "import subprocess,sys,time\n"
+         "try:\n    open('/proc/self/comm', 'w').write('x) S 1 1 (y')\nexcept OSError:\n    pass\n"
+         "subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'])\n"
+         "print('up', flush=True); time.sleep(60)"],
+        stdout=subprocess.PIPE,
+    )
+    try:
+        assert child.stdout is not None and child.stdout.readline().strip() == b"up"
+        found = runner._descendants(child.pid)
+        assert len(found) == 1 and child.pid not in found and os.getpid() not in found
+        assert child.pid in runner._descendants(os.getpid())
+        assert runner._descendants(2**22 + 12345) == []
+    finally:
+        for pid in runner._descendants(child.pid):
+            os.kill(pid, signal.SIGKILL)
+        child.kill()
+        child.wait()
 
 
 @posix_only
@@ -1758,7 +1971,7 @@ def test_plan_resolve_run_with_a_real_vault(vault, monkeypatch: pytest.MonkeyPat
 
 def test_public_names() -> None:
     assert set(runner.__all__) == {
-        "MIN_MASK_BYTES", "MIN_ENCODED_BYTES", "CommandNotFoundError", "CommandNotExecutableError",
+        "MIN_MASK_BYTES", "MIN_LINE_BYTES", "MIN_ENCODED_BYTES", "CommandNotFoundError", "CommandNotExecutableError",
         "CommandTimeoutError", "CommandCancelledError", "RunResult", "Masker", "secret_patterns", "run_command",
         "run_captured", "locate_command",
     }

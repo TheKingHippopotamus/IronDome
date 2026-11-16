@@ -87,7 +87,7 @@ class SoftwareBackend(DeviceBackend):
         except FileNotFoundError:
             raise HardwareError(
                 "the device key for this vault is not on this machine. "
-                "Use your recovery key, or restore a portable backup."
+                "Use your recovery key (irondome recovery use), or restore a portable backup."
             ) from None
         except OSError as exc:
             raise HardwareError(f"cannot read the device key: {exc.strerror or exc}") from None

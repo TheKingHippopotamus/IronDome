@@ -162,6 +162,7 @@ __all__ = [
     "MODE_REVEAL",
     "MODES",
     "TOKEN_PATTERN",
+    "session_expires",
     "SESSION_TTL_MIN",
     "SESSION_TTL_MAX",
     "GRANT_TTL_MIN",
@@ -1114,7 +1115,9 @@ def _reference(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _publish(vault: "Vault", header: _Header, action: str, detail: str, nothing: str) -> None:
+def _publish(
+    vault: "Vault", header: _Header, action: str, detail: str, nothing: str, actor: str = _OWNER
+) -> None:
     """Write a new capability file and record it; if it cannot be recorded, take it back."""
     path = _path(header.id)
     with _store(VaultError):
@@ -1126,7 +1129,7 @@ def _publish(vault: "Vault", header: _Header, action: str, detail: str, nothing:
                     vault_id=vault.vault_id,
                     kid=audit.KID_VAULT,
                     action=action,
-                    actor=_OWNER,
+                    actor=actor,
                     target=header.id,
                     detail=detail,
                 )
@@ -1219,8 +1222,12 @@ def create_grant(
     ttl: int = 900,
     uses: Optional[int] = 1,
     label: str = "",
+    actor: str = _OWNER,
 ) -> Tuple[str, GrantInfo]:
     """Snapshot the named values under a new grant token. Returns ``(token, info)``.
+
+    *actor* is who the audit log says made it: the owner, or ``"session"`` when a session token and
+    nothing else opened the vault for this.
 
     Each of the 1 to 64 *references* is resolved with ``vault.resolve`` and
     its value is copied as it is now; later changes to the vault do not reach
@@ -1313,7 +1320,9 @@ def create_grant(
         wipe_bytes(text)
     limit = "unlimited" if uses is None else str(uses)
     detail = f"mode={mode} uses={limit} ttl={ttl}s" + (f" label={label}" if label else "")
-    _publish(vault, header, "grant.create", f"{detail} references: {', '.join(names)}", "no grant was made")
+    _publish(
+        vault, header, "grant.create", f"{detail} references: {', '.join(names)}", "no grant was made", actor
+    )
     return token, GrantInfo(
         id=cap_id,
         mode=mode,
@@ -1386,6 +1395,27 @@ def open_session(token: str, file: "VaultFile") -> SecureBuffer:
                 return vault_key
     finally:
         wipe_bytes(secret)
+
+
+def session_expires(token: str) -> Optional[int]:
+    """When the session *token* names ends (Unix time), or None if no such session is here.
+
+    Read from the file's clear header. The time is part of what the token
+    authenticates, so once :func:`open_session` has opened that same file
+    with the token, the value is the one the session was made with.
+    """
+    try:
+        kind, cap_id, secret = parse_token(token)
+    except AuthError:
+        return None
+    wipe_bytes(secret)
+    if kind != KIND_SESSION:
+        return None
+    try:
+        header = _load_quietly(_path(cap_id), cap_id)
+    except (OSError, IronDomeError):
+        return None
+    return header.expires if header is not None and header.kind == KIND_SESSION else None
 
 
 def _unwrap(header: _Header, secret: bytes, device_key: SecureBuffer) -> bytearray:

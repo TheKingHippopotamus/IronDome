@@ -478,7 +478,7 @@ def read_secret_from_fd(fd: int, *, allow_empty: bool = False) -> Optional[Secur
                 if view[length - 1] == 0x0A:
                     break
             else:
-                raise UsageError("that secret is too long")
+                raise UsageError(f"that secret is too long: IronDome reads at most {_MAX_SECRET - 1} bytes on a line")
         except OSError as exc:
             raise UsageError(f"could not read the secret from the input: {exc.strerror or exc}") from None
         return _finish(scratch, length, allow_empty=allow_empty)
@@ -570,7 +570,7 @@ def _read_secret_windows(prompt: str, *, allow_empty: bool) -> Optional[SecureBu
                 continue
             encoded = char.encode("utf-8")
             if length + len(encoded) > _MAX_SECRET:
-                raise UsageError("that secret is too long")
+                raise UsageError(f"that secret is too long: IronDome reads at most {_MAX_SECRET - 1} bytes on a line")
             view[length : length + len(encoded)] = encoded
             length += len(encoded)
         msvcrt.putwch("\r")  # type: ignore[attr-defined]
