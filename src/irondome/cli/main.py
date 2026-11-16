@@ -324,8 +324,30 @@ def _written_flags(arguments: Sequence[str]) -> argparse.Namespace:
     return argparse.Namespace(json="--json" in ours, no_color="--no-color" in ours)
 
 
+def _open_standard_streams() -> None:
+    """Give a closed stdin, stdout or stderr the null device, so that writing to it is not an error.
+
+    A shell can start a program with one of them closed (``irondome status >&-``). Python then puts
+    ``None`` in its place, and the first write to it would end in a traceback.
+    """
+    for number, name, mode in ((0, "stdin", "r"), (1, "stdout", "w"), (2, "stderr", "w")):
+        try:
+            os.fstat(number)
+        except OSError:
+            try:
+                os.open(os.devnull, os.O_RDWR)  # the lowest free descriptor, which is this one
+            except OSError:
+                continue  # no null device: left closed, and Python's own None is what a write meets
+        if getattr(sys, name) is None:
+            try:
+                setattr(sys, name, open(number, mode, closefd=False))  # noqa: SIM115 - lives as long as the process
+            except OSError:
+                pass
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the command line. Returns the process exit status."""
+    _open_standard_streams()
     harden_process()
     arguments: List[str] = list(sys.argv[1:] if argv is None else argv)
     written = _written_flags(arguments)

@@ -67,7 +67,8 @@ def test_a_biometric_keyslot_asks_the_helper_for_a_biometric_key(monkeypatch):
             return {"secure_enclave": True, "biometry_usable": True}
         return {"key": base64.b64encode(b"blob").decode()}
 
-    def agree(key, peer, *, interactive, reason):
+    def agree(key, peer, *, interactive, reason, touch, fresh):
+        assert touch is True and fresh is True  # a refusal is explained as one of a new key a finger releases
         calls.append(["agree", interactive])
         raise AuthError("Touch ID is required for this vault")
 

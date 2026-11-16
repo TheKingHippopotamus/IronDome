@@ -580,7 +580,8 @@ def _report_grant(ctx: Context, token: str, info: "caps.GrantInfo", covers: Sequ
     for label, value in (
         ("covers", ", ".join(_printable(text) for text in covers)),
         ("mode", mode),
-        ("expires", f"{format_time(info.expires)}, in {format_duration(info.expires - time.time())}"),
+        # Its whole life, not what is left of it a moment later: a grant made for one minute says 60s, not 59s.
+        ("expires", f"{format_time(info.expires)}, in {format_duration(info.expires - info.created)}"),
         ("uses", "unlimited" if info.uses_left is None else str(info.uses_left)),
         ("id", info.id),
     ):
@@ -1283,7 +1284,8 @@ def _register_run(subparsers: Any, common: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--no-mask",
         action="store_true",
-        help="let the command write to the terminal directly, unfiltered; this shows the values, so a grant "
+        help="let the command write to the terminal directly, unfiltered (without it the command's output is a "
+        "pipe that IronDome filters, not a terminal); this shows the values, so a grant "
         "or entry policy must allow revealing them",
     )
     parser.add_argument("--cwd", metavar="DIR", help="run the command in DIR")

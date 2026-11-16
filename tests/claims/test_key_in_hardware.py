@@ -55,7 +55,7 @@ def test_on_a_mac_a_key_blob_this_enclave_did_not_make_is_rejected(secure_enclav
     state = json.loads(path.read_text())
     blob = bytearray(base64.b64decode(state["key"]))
     # Refused either way; the reason can only be told apart while the screen is unlocked.
-    reason = "this Mac is locked" if mac_screen_locked() else "no longer accepts"
+    reason = "this Mac is locked" if mac_screen_locked() else "does not accept this device key"
     for foreign in (bytes(blob[:-1]), os.urandom(len(blob)), bytes(blob[:8]) + os.urandom(len(blob) - 8)):
         path.write_text(json.dumps(dict(state, key=base64.b64encode(foreign).decode())))
         with pytest.raises(HardwareError, match=reason):

@@ -14,7 +14,7 @@ Run the checks on your own machine with `irondome verify` (`irondome verify --cl
 | [`key-in-hardware`](#key-in-hardware) | On an Apple-silicon Mac or Linux with a TPM 2.0, the device secret is held by the security chip | macOS, Linux | 9 | `key_in_hardware` |
 | [`biometric-enforced-by-chip`](#biometric-enforced-by-chip) | Touch ID is enforced by the Secure Enclave, not by IronDome | macOS | 12 | `biometric_enforced` |
 | [`tpm-rate-limit`](#tpm-rate-limit) | On Linux the TPM checks the password and rate-limits guesses | Linux | 9 | test suite only |
-| [`crypto-erase`](#crypto-erase) | nuke makes every copy of the vault unreadable | macOS, Linux | 13 | `crypto_erase` |
+| [`crypto-erase`](#crypto-erase) | nuke makes every copy of the vault directory unreadable | macOS, Linux | 13 | `crypto_erase` |
 | [`keys-wiped`](#keys-wiped) | Key material is wiped from memory | macOS, Linux | 34 | `keys_wiped` |
 | [`everything-encrypted`](#everything-encrypted) | Names, usernames, URLs and tags are encrypted, not just passwords | macOS, Linux | 7 | `everything_encrypted` |
 | [`tamper-evident`](#tamper-evident) | Altered, swapped or rolled-back records are rejected | macOS, Linux | 10 | `tamper_evident` |
@@ -148,11 +148,11 @@ Tests (9):
 
 ## crypto-erase
 
-**nuke makes every copy of the vault unreadable**
+**nuke makes every copy of the vault directory unreadable**
 
 nuke destroys the device secrets before it deletes anything else: the one every keyslot opened by a password or a fingerprint needs, and the one every session and grant is bound to. Afterwards, restoring a complete, bit-perfect copy of the vault directory and supplying the correct master password, a session token or a grant token opens nothing: what an SSD kept of the old blocks no longer matters.
 
-*Where it stops:* A recovery key on paper can still open a surviving copy of the vault file; nuke says so when the vault has one. A portable backup made with irondome export needs no device secret and opens with its own password. TPM: the secret was only ever inside the chip. Secure Enclave: the sealed key blob is deleted, and a recovered copy of it would still need this Mac's Secure Enclave (and, under Touch ID, a finger). File-based backend: the device key file is overwritten and unlinked, which on an SSD is best effort.
+*Where it stops:* A recovery key on paper can still open a surviving copy of the vault file; nuke says so when the vault has one. A portable backup made with irondome export needs no device secret and opens with its own password. TPM: the secret was only ever inside the chip. Secure Enclave: what is deleted is the sealed key blob, a file in the device directory, and a copy of that file works again in this Mac's Secure Enclave (under Touch ID, with a finger) and nowhere else. So the statement is about copies of the vault directory: a backup, clone or snapshot that also holds the device directory, put back on this Mac, opens the vault with the master password or with a token that was valid when the copy was made. IronDome marks the device directory as left out of Time Machine when it creates it; a clone, a disk image, a local snapshot or a backup program that does not read the mark is not kept from copying it. The mark was read back with macOS's own tools; no Time Machine backup was run to see it honoured. File-based backend: the device key file is overwritten and unlinked, which on an SSD is best effort, and a copy of the device directory opens the vault in the same way.
 
 - Platforms: macOS, Linux
 - Closes L3: 3.x: nuke could not defeat an SSD controller (overwrite, fsync, unlink).

@@ -36,8 +36,11 @@ process umask.
 
 from __future__ import annotations
 
+import ctypes
+import ctypes.util
 import errno
 import os
+import plistlib
 import re
 import stat
 import sys
@@ -46,7 +49,7 @@ import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from irondome.errors import UsageError, VaultError
 
@@ -57,6 +60,8 @@ __all__ = [
     "ENV_BUNKER",
     "root",
     "device_root",
+    "exclude_from_backup",
+    "excluded_from_backup",
     "validate_bunker_name",
     "bunker_name",
     "bunkers",
@@ -279,6 +284,70 @@ def _is_own(path: Path) -> bool:
     return False
 
 
+#: The mark Time Machine reads on an item it is to leave out: what ``tmutil addexclusion ITEM`` writes.
+_BACKUP_EXCLUSION = b"com.apple.metadata:com_apple_backup_excludeItem"
+_BACKUP_EXCLUDED_BY = "com.apple.backupd"
+
+
+_xattr_cache: List[Optional[Tuple[Any, Any]]] = []
+
+
+def _xattr_calls() -> Optional[Tuple[Any, Any]]:
+    """macOS's ``setxattr`` and ``getxattr``; None anywhere else, or where libc cannot be loaded."""
+    if not _xattr_cache:
+        _xattr_cache.append(_load_xattr_calls())
+    return _xattr_cache[0]
+
+
+def _load_xattr_calls() -> Optional[Tuple[Any, Any]]:
+    if sys.platform != "darwin":
+        return None
+    try:
+        libc = ctypes.CDLL(ctypes.util.find_library("c") or None, use_errno=True)
+        setter, getter = libc.setxattr, libc.getxattr
+    except (OSError, AttributeError):
+        return None
+    # (path, name, value, size, position, options), as setxattr(2) and getxattr(2) declare them on macOS.
+    text, size = ctypes.c_char_p, ctypes.c_size_t
+    setter.argtypes, setter.restype = [text, text, text, size, ctypes.c_uint32, ctypes.c_int], ctypes.c_int
+    getter.argtypes, getter.restype = [text, text, text, size, ctypes.c_uint32, ctypes.c_int], ctypes.c_ssize_t
+    return setter, getter
+
+
+def exclude_from_backup(path: Union[str, Path]) -> Optional[bool]:
+    """Mark *path* as left out of Time Machine backups, with everything inside it.
+
+    The device directory holds what ``nuke``, ``rekey`` and ``passwd`` destroy by deleting it: on a
+    Mac, the sealed Secure Enclave key. A backup that held those files would bring them
+    back. The mark is the one ``tmutil addexclusion`` writes (an extended attribute that moves with
+    the directory); it is written directly because that tool takes seconds. Returns True when the
+    mark is on the directory, False when it could not be written, None where there is no Time
+    Machine. What the mark does not reach is said in docs/THREAT_MODEL.md: clones, disk images,
+    local snapshots and backup programs that do not read it.
+    """
+    calls = _xattr_calls()
+    if calls is None:
+        return None
+    value = plistlib.dumps(_BACKUP_EXCLUDED_BY, fmt=plistlib.FMT_BINARY)
+    try:
+        return bool(calls[0](os.fsencode(str(path)), _BACKUP_EXCLUSION, value, len(value), 0, 0) == 0)
+    except (OSError, ValueError):
+        return False
+
+
+def excluded_from_backup(path: Union[str, Path]) -> Optional[bool]:
+    """Whether *path* carries the mark :func:`exclude_from_backup` writes. None where there is no Time Machine."""
+    calls = _xattr_calls()
+    if calls is None:
+        return None
+    held = ctypes.create_string_buffer(256)
+    try:
+        size = calls[1](os.fsencode(str(path)), _BACKUP_EXCLUSION, held, len(held), 0, 0)
+    except (OSError, ValueError):
+        return False
+    return bool(size > 0 and _BACKUP_EXCLUDED_BY.encode("ascii") in held.raw[:size])
+
+
 def _tighten(path: Path) -> None:
     try:
         os.chmod(path, DIR_MODE)
@@ -312,6 +381,8 @@ def ensure_dir(path: Union[str, Path]) -> Path:
             continue
         created = True
         _tighten(directory)  # mkdir applies the umask; this does not
+        if directory == device_root():
+            exclude_from_backup(directory)  # a backup that held the device keys would outlive nuke
     if not target.is_dir():
         raise FileExistsError(errno.EEXIST, "exists and is not a directory", str(target))
     if not created and _is_own(target):

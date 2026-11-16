@@ -874,3 +874,24 @@ def test_whether_a_backend_is_hardware_is_asked_of_this_machine_and_not_of_the_c
     assert devices.hardware_here(Unreachable()) is True  # type: ignore[arg-type]
     assert devices.hardware_here(Passive()) is False  # type: ignore[arg-type]
     assert devices.hardware_here(devices.get_backend("software")) is False
+
+
+def test_fault_tells_a_key_file_that_cannot_be_the_key(backend):
+    """`status` and `doctor` called a cut-off or empty key file "present"."""
+    descriptor, _ = enroll(backend)
+    (path,) = paths.device_dir().glob("*.key")
+    assert backend.fault(descriptor) is None
+    for spoiled in (b"x" * 31, b"", b"x" * 33):
+        path.write_bytes(spoiled)
+        assert backend.exists(descriptor) and backend.fault(descriptor) == "the device key file is damaged"
+    path.unlink()
+    assert backend.fault(descriptor) is None  # absent is what exists() reports
+
+
+def test_fault_follows_a_link_as_unseal_does(backend, tmp_path):
+    descriptor, _ = enroll(backend)
+    (path,) = paths.device_dir().glob("*.key")
+    moved = tmp_path / "moved.key"
+    path.rename(moved)
+    path.symlink_to(moved)
+    assert backend.fault(descriptor) is None

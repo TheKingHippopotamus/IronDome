@@ -92,7 +92,12 @@ _BACKUP_FILES = re.compile(rf"vault-[0-9]{{10,}}\.irondome|{_TEMPORARY}")
 _CAP_FILES = re.compile(r"(?i:[0-9a-f]{32}\.json)|\.lock|\.tmp-.*", re.DOTALL)
 _CAPABILITY = re.compile(r"[0-9a-f]{32}\.json", re.IGNORECASE)
 _DEVICE_FILES = re.compile(rf"[0-9a-f]{{32}}\.(?:key|json)|tpm2-nv-indices\.(?:json|lock)|{_TEMPORARY}")
-_HELPER_FILES = re.compile(r"irondome-se-[0-9a-f]{16}|\.build-[0-9]+-irondome-se-[0-9a-f]{16}")
+#: The compiled helper, the record of its SHA-256 beside it, the lock a build holds, and an interrupted build
+#: or write of either.
+_HELPER_FILES = re.compile(
+    rf"irondome-se-[0-9a-f]{{16}}(?:\.sha256)?|\.build-[0-9]+-irondome-se-[0-9a-f]{{16}}|\.build\.lock"
+    rf"|{_TEMPORARY}"
+)
 #: A device secret of the file-based backend (``.key``) or of the Secure Enclave backend (``.json``).
 _SECRET_FILE = re.compile(r"([0-9a-f]{32})\.(key|json)")
 _VAULT_FILE = re.compile(r"vault\.irondome|\.tmp-rekey-[0-9a-f]{16}\.irondome")

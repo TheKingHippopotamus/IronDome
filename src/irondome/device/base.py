@@ -124,6 +124,15 @@ class DeviceBackend(abc.ABC):
     def exists(self, descriptor: Dict[str, Any]) -> bool:
         """True while the material needed to unseal is still present."""
 
+    def fault(self, descriptor: Dict[str, Any]) -> Optional[str]:
+        """Why the stored material cannot be the key, told without using the chip or asking anyone.
+
+        None when the material is absent (``exists`` says that), when it looks whole, and for a backend
+        that keeps nothing it could look at. A whole-looking file may still be refused by the chip:
+        only unsealing tells.
+        """
+        return None
+
     @abc.abstractmethod
     def destroy_all(self) -> int:
         """Erase every device secret this backend holds for this user.

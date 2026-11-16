@@ -100,25 +100,46 @@ and biometry are usable, create a key, and run one key agreement. It never
 sees the vault, the password or the vault key.
 
 The vaults and the device material are kept apart on purpose, so a backup or
-sync of a vault never carries what binds it to the machine:
+sync of the vault directory never carries what binds it to the machine. On
+macOS the device directory is also marked as left out of Time Machine when it
+is created; a backup of the whole home folder made by anything that does not
+read that mark carries both (THREAT_MODEL.md says what that means for
+`nuke`):
 
 ```
 ~/.irondome/                                   the vaults ($IRONDOME_HOME overrides)
   default-bunker                                set by `irondome bunker use`
   bunkers/alpha/vault.irondome, backups/, caps/, audit.log, config.json
+                .lock, audit.log.lock           empty files commands lock while they write
                 audit-<time>.log                after a re-key: the log from before it
   bunkers/bravo/...
 
 ~/Library/Application Support/IronDome/device/  macOS; on Linux $XDG_STATE_HOME/irondome/device
                                                 (default ~/.local/state/irondome/device);
                                                 $IRONDOME_DEVICE_DIR overrides
-  helper/                                       the compiled Secure Enclave helper, shared
+  helper/                                       the compiled Secure Enclave helper, shared,
+                                                with the SHA-256 it had when it was compiled
   bunkers/alpha/                                what binds alpha to this machine
   bunkers/bravo/
 ```
 
 `backups/` holds the automatic snapshots of earlier versions of the vault
 file (ten by default); `caps/` holds one file per session or grant.
+
+Names: an entry is found whatever the letter case and whichever way an accent
+was typed ("café" as one code point or as two is one name, stored in the
+composed form). Aliases and field names are matched exactly, as the
+environment variable names they become are, and under a grant a reference
+has to be written as the grant has it.
+
+The main environment variables a person sets: `IRONDOME_BUNKER` (which bunker),
+`IRONDOME_GRANT` and `IRONDOME_SESSION` (a token to work under),
+`IRONDOME_HOME` and `IRONDOME_DEVICE_DIR` (where the two directories are),
+`IRONDOME_DEVICE_BACKEND` (which backend a new device key uses),
+`IRONDOME_KDF_MEMORY_MIB` (the memory Argon2id uses for a new password),
+`IRONDOME_NO_TOUCH=1` (no Touch ID prompt is ever put on the screen: a command
+that would need one says so, or asks for the master password where the vault
+allows it) and `IRONDOME_DEBUG=1` (leaves core dumps and debuggers alone).
 
 A *bunker* is one vault with its own vault key, keyslots, device secrets,
 sessions, grants, audit log and settings. Nothing is shared between bunkers

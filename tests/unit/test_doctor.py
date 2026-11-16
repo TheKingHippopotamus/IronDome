@@ -23,7 +23,7 @@ mac_only = pytest.mark.skipif(sys.platform != "darwin", reason="the Secure Encla
 
 TOP_KEYS = {
     "irondome", "python", "cryptography", "openssl", "platform", "backends", "new_vault_backend",
-    "secure_enclave_helper", "bunker", "bunkers", "paths", "vault", "sessions", "permissions", "memory",
+    "secure_enclave_helper", "bunker", "bunkers", "paths", "vault", "sessions", "permissions", "backup", "memory",
     "clipboard", "tpm", "legacy_vault", "findings", "problems",
 }
 
@@ -207,6 +207,7 @@ def test_a_compiled_helper_is_probed(monkeypatch: pytest.MonkeyPatch, report_of:
     helper = macos_se._helper_path()
     paths.ensure_dir(helper.parent)
     helper.write_bytes(b"#!/bin/sh\n")
+    macos_se._record_path(helper).write_text(hashlib.sha256(b"#!/bin/sh\n").hexdigest())  # as a compile leaves it
     backend = devices.get_backend("macos-se")
     monkeypatch.setattr(backend, "probe", lambda: Probe("macos-se", True, True, True, "Secure Enclave with Touch ID"))
     monkeypatch.delenv("IRONDOME_DEVICE_BACKEND")
@@ -386,7 +387,7 @@ def test_doctor_uses_only_the_public_clipboard_and_enclave_helper_interfaces(
         monkeypatch.setattr(module, name, private)
     monkeypatch.setattr(clipboard, "tools", lambda: ("pbcopy", "/usr/bin/pbcopy", "/usr/bin/pbpaste"))
     status = {"source": "/x/irondome_se.swift", "source_sha256": "ab" * 32, "path": "/x/helper", "built": False,
-              "from_environment": False, "compiler": False, "error": None}
+              "damaged": False, "from_environment": False, "compiler": False, "error": None}
     monkeypatch.setattr(macos_se, "helper_status", lambda: dict(status))
     report = report_of()
     assert report["clipboard"] == {"tool": "/usr/bin/pbcopy", "reader": "/usr/bin/pbpaste"}
@@ -461,3 +462,61 @@ def test_sessions_and_grants_are_counted(make_vault: Any, report_of: Callable[[]
     caps.create_session(vault, ttl=600)
     caps.create_grant(vault, ["github"], ttl=600)
     assert report_of()["sessions"] == {"sessions": 1, "grants": 1, "expired": 0}
+
+
+# -- what a by-hand trial on a Mac found -------------------------------------------------------------------
+
+
+def test_a_device_key_file_that_is_cut_off_is_a_problem_not_present(
+    make_vault: Callable[..., Any], report_of: Callable[[], Dict[str, Any]]
+) -> None:
+    """`doctor` said "ok device-keys" and exit 0 for a key file of no bytes."""
+    vault, _ = make_vault()
+    vault.close()
+    (key,) = paths.device_dir().glob("*.key")
+    key.write_bytes(b"")
+    report = report_of()
+    (problem,) = findings(report, "problem", "device-keys")
+    assert "damaged" in problem["message"] and "irondome recovery use" in problem["remedy"]
+    assert not findings(report, "ok", "device-keys")
+    assert [slot["device_key_fault"] for slot in report["vault"]["keyslots"] if slot["backend"]] == [
+        "the device key file is damaged"
+    ]
+
+
+@mac_only
+def test_the_backup_mark_of_the_device_directory_is_reported(report_of: Callable[[], Dict[str, Any]]) -> None:
+    assert report_of()["backup"] is None  # no device directory yet: nothing to mark
+    paths.ensure_dir(paths.device_dir())
+    report = report_of()
+    assert report["backup"] == {"device_root": str(paths.device_root()), "excluded": True}
+    assert findings(report, "ok", "backup")
+
+
+@mac_only
+def test_a_device_directory_without_the_backup_mark_is_a_warning(
+    monkeypatch: pytest.MonkeyPatch, report_of: Callable[[], Dict[str, Any]]
+) -> None:
+    os.makedirs(paths.device_root())  # as a restored or hand-made folder is: no mark
+    report = report_of()
+    (warning,) = findings(report, "warning", "backup")
+    assert "Time Machine" in warning["message"] and warning["remedy"].startswith("run: tmutil addexclusion ")
+
+
+@mac_only
+def test_a_cached_helper_that_is_not_the_one_compiled_is_a_warning(
+    monkeypatch: pytest.MonkeyPatch, report_of: Callable[[], Dict[str, Any]]
+) -> None:
+    from irondome.device import macos_se
+
+    helper = macos_se._helper_path()
+    paths.ensure_dir(helper.parent)
+    helper.write_bytes(b"cut off")
+    monkeypatch.setattr(macos_se, "_find_swiftc", lambda: "/usr/bin/swiftc")
+    monkeypatch.delenv("IRONDOME_DEVICE_BACKEND")
+    report = report_of()
+    (warning,) = findings(report, "warning", "secure-enclave-helper")
+    assert "damaged or replaced" in warning["message"] and "compiled again" in warning["message"]
+    assert not findings(report, "ok", "secure-enclave-helper")
+    (enclave,) = [item for item in report["backends"] if item["name"] == "macos-se"]
+    assert enclave["probed"] is False and "damaged" in enclave["detail"]

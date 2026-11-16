@@ -1,4 +1,4 @@
-"""Claim ``crypto-erase``: nuke makes every copy of the vault unreadable.
+"""Claim ``crypto-erase``: nuke makes every copy of the vault directory unreadable.
 
 Statement: nuke destroys the device secrets before it deletes anything else:
 the one every keyslot opened by a password or a fingerprint needs, and the one

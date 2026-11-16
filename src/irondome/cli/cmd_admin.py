@@ -32,6 +32,7 @@ import dataclasses
 import hmac
 import json
 import os
+import sys
 import tempfile
 import textwrap
 from dataclasses import dataclass, field
@@ -50,7 +51,7 @@ from irondome.generator import estimate_strength
 from irondome.keys import KIND_DEVICE, KIND_PASSWORD, KIND_RECOVERY, Keyslot
 from irondome.secmem import SecureBuffer, wipe_bytes
 from irondome.unlock import MIN_PASSWORD_BYTES, MODE_PASSWORD, MODE_TOUCHID, MODES, create_vault, open_vault, unlock
-from irondome.vault import _SNAPSHOT, Entry, Secret, Vault, VaultFile, vault_exists, without_control
+from irondome.vault import _SNAPSHOT, Entry, Secret, Vault, VaultFile, fold_name, vault_exists, without_control
 
 __all__ = ["register"]
 
@@ -247,8 +248,9 @@ def register(subparsers: Any, common: argparse.ArgumentParser) -> None:
         (
             "Re-encrypt the vault under a new vault key and vault id, with fresh keyslots of the same kinds (a "
             "new recovery key is shown once). Afterwards every session and grant is gone, the snapshots are "
-            "deleted, the old device keys are destroyed and the audit log is archived, so nothing taken before "
-            "opens the vault again; if a re-key is stopped part way, the next one also finishes what it left. "
+            "deleted, the old device keys are destroyed and the audit log is archived, so no copy of the "
+            "vault files taken before opens it again; if a re-key is stopped part way, the next one also finishes "
+            "what it left. "
             "Use it after a session, a device or a backup may have been compromised."
         ),
         cmd_rekey,
@@ -530,8 +532,8 @@ def cmd_backup_ls(ctx: Context, args: argparse.Namespace) -> int:
             for item in snapshots
         ),
     )
-    current = "missing or unreadable" if live_generation is None else f"generation {live_generation}"
-    ctx.out.info(f"Bunker {bunker}: the vault itself is at {current}. Restore one with: irondome backup restore N")
+    current = "is missing or unreadable" if live_generation is None else f"is at generation {live_generation}"
+    ctx.out.info(f"Bunker {bunker}: the vault itself {current}. Restore one with: irondome backup restore N")
     return 0
 
 
@@ -944,8 +946,8 @@ def _from_backup(ctx: Context, path: Path, warnings: List[str]) -> List[_Incomin
 
 
 def _named(vault: Vault, name: str) -> Optional[Entry]:
-    folded = name.casefold()
-    return next((entry for entry in vault.entries.values() if entry.name.casefold() == folded), None)
+    folded = fold_name(name)
+    return next((entry for entry in vault.entries.values() if fold_name(entry.name) == folded), None)
 
 
 def _same(vault: Vault, existing: Entry, item: _Incoming) -> bool:
@@ -1032,7 +1034,7 @@ def _merge(
     vault: Vault, incoming: Sequence[_Incoming], policy: str, *, keep_agent: bool, warnings: List[str]
 ) -> Tuple[List[_Outcome], int]:
     """Add *incoming* to *vault* in memory. Returns what happened to each entry, and how many aliases were set."""
-    earlier = {entry.name.casefold(): entry.id for entry in vault.entries.values()}
+    earlier = {fold_name(entry.name): entry.id for entry in vault.entries.values()}
     outcomes: List[_Outcome] = []
     placed: List[Tuple[_Incoming, Entry]] = []
     for item in incoming:
@@ -1048,7 +1050,7 @@ def _merge(
                 if (current.entry, current.field) != (entry.id, target):
                     warnings.append(f"alias {alias} was not imported: it already names another value")
                 continue
-            shadowed = earlier.get(alias.casefold())
+            shadowed = earlier.get(fold_name(alias))
             if shadowed is not None and shadowed != entry.id:
                 warnings.append(f"alias {alias} was not imported: an entry of that name is already in the vault")
                 continue
@@ -2041,12 +2043,32 @@ def cmd_nuke(ctx: Context, args: argparse.Namespace) -> int:
     caveat = sorted(set(report.recovery_bunkers) | set(plan.recovery_bunkers))
     if ctx.out.json_mode:
         ctx.out.json({"plan": _plain(plan), "report": _plain(report), "legacy": legacy, "success": success,
-                      "nothing_to_do": False})
+                      "nothing_to_do": False,
+                      "device_copy_caveat": _device_copy_caveat() if _device_copies_matter(report) else None})
     else:
         _show_nuked(ctx, report, legacy, success)
     if caveat:
         ctx.out.warn(_recovery_caveat(caveat))
     return 0 if success else 1
+
+
+def _device_copies_matter(report: nuke.NukeReport) -> bool:
+    """Whether the device keys nuke destroyed were files: a Mac's sealed Secure Enclave keys, or file-based keys."""
+    return bool(report.device_keys_destroyed) and (sys.platform == "darwin" or not report.hardware_backed)
+
+
+def _device_copy_caveat() -> str:
+    """What nuke cannot reach where a device key is a file: a copy of the device directory made before it ran."""
+    folder = paths.device_root()
+    kept_out = (
+        " IronDome marked that folder as left out of Time Machine when it made it; nothing else is kept from "
+        "copying it."
+    ) if sys.platform == "darwin" else ""
+    return (
+        f"on this machine the device keys were files in {folder}. A backup, clone or disk snapshot made before now "
+        "that holds that folder together with the vault can still open the vault on this machine, with the master "
+        f"password or with a token that was valid then.{kept_out} If such a copy exists, destroy it as well."
+    )
 
 
 def _show_nuked(ctx: Context, report: nuke.NukeReport, legacy: Optional[Dict[str, Any]], success: bool) -> None:
@@ -2077,6 +2099,8 @@ def _show_nuked(ctx: Context, report: nuke.NukeReport, legacy: Optional[Dict[str
             "Destroyed every bunker on this machine. Their device keys are gone, so no copy of those vault files "
             "opens with a master password any more."
         )
+        if _device_copies_matter(report):
+            ctx.out.warn(_device_copy_caveat())
     else:
         ctx.out.error(f"nuke did not finish: {len(problems)} things above are left or went wrong")
 
@@ -2142,7 +2166,9 @@ def cmd_doctor(ctx: Context, args: argparse.Namespace) -> int:
         ctx.out.table(
             ("keyslot", "kind", "device key", "description"),
             ((slot["id"], slot["kind"],
-              "-" if slot["device_key_present"] is None else ("present" if slot["device_key_present"] else "MISSING"),
+              "-" if slot["device_key_present"] is None
+              else "DAMAGED" if slot.get("device_key_fault")
+              else ("present" if slot["device_key_present"] else "MISSING"),
               slot["description"]) for slot in vault["keyslots"]),
         )
     ctx.out.data()

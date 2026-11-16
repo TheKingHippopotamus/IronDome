@@ -1947,3 +1947,60 @@ def test_a_vault_behaves_like_a_dictionary_of_entries(operations, vaults, isolat
 def test_helpers_use_the_conftest_password():
     with secret(PASSWORD) as buffer:
         assert isinstance(buffer, SecureBuffer) and bytes(buffer.view()) == PASSWORD.encode()
+
+
+# -- one Unicode form for names (found by hand on a Mac) ----------------------------------------------------
+
+
+NFC, NFD = "café", "café"  # the same word: one code point for the accented letter, or two
+
+
+def test_a_name_typed_in_either_unicode_form_is_one_entry(plain):
+    """macOS file names and many pastes carry the two-code-point form; both gave two rows that looked alike."""
+    made = plain.add(NFD, Secret(password="one"))
+    assert made.name == NFC  # stored in one form
+    with pytest.raises(UsageError, match="already exists"):
+        plain.add(NFC, Secret())
+    with pytest.raises(UsageError, match="already exists"):
+        plain.add(NFD.upper(), Secret())
+    assert plain.find(NFD) is plain.find(NFC) is made
+    assert plain.has_name(NFD) and plain.has_name(NFC)
+    assert plain.resolve(f"irondome://{NFD}/password")[0] is made
+    assert [entry.name for entry in plain.list(query=NFD)] == [NFC]
+
+
+def test_renaming_to_the_other_unicode_form_changes_nothing_and_clashes_are_seen(plain):
+    first = plain.add(NFC, Secret())
+    plain.update(first, name=NFD)
+    assert plain.find(NFC).name == NFC
+    other = plain.add("tea", Secret())
+    with pytest.raises(UsageError, match="already exists"):
+        plain.update(other, name=NFD)
+
+
+def test_a_name_stored_in_the_other_form_by_an_older_vault_is_still_reached(plain):
+    """A vault written before names were stored in one form may hold both; each is reached as it is typed."""
+    old = plain.add("tea", Secret(password="old"))
+    old.name = NFD  # as such a vault holds it
+    assert plain.find(NFD) is old and plain.find(NFC) is old  # alone, either spelling reaches it
+    new = plain.add("coffee", Secret(password="new"))
+    new.name = NFC
+    assert plain.find(NFD) is old and plain.find(NFC) is new
+    with pytest.raises(UsageError, match="differ only in case or Unicode form"):
+        plain.find(NFC.upper())
+
+
+def test_search_matches_a_username_typed_in_the_other_unicode_form(plain):
+    plain.add("mail", Secret(), username=NFD + "@example.com", tags=[NFD])
+    assert [entry.name for entry in plain.list(query=NFC)] == ["mail"]
+    assert [entry.name for entry in plain.list(query=NFD.upper())] == ["mail"]
+
+
+def test_a_name_clash_names_the_alias_spelled_the_same_way(plain):
+    """With aliases API_KEY and api_key, adding an entry api_key was refused naming API_KEY."""
+    first = plain.add("one", Secret())
+    second = plain.add("two", Secret())
+    plain.set_alias("API_KEY", first)
+    plain.set_alias("api_key", second)
+    assert "the alias api_key (it points at 'two')" in plain.conflict("api_key")
+    assert "the alias API_KEY (it points at 'one')" in plain.conflict("API_KEY")

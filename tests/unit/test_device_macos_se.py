@@ -137,7 +137,7 @@ def enrolled(backend: SecureEnclaveBackend) -> Dict[str, str]:
 def test_probe_with_a_working_helper(standin, backend):
     probe = backend.probe()
     assert (probe.name, probe.available, probe.hardware, probe.biometry) == ("macos-se", True, True, True)
-    assert "touchid" in probe.detail
+    assert probe.detail == "Secure Enclave, Touch ID available"
 
 
 def test_probe_reports_a_mac_without_a_secure_enclave(standin, backend):
@@ -224,7 +224,7 @@ def test_a_long_reason_is_cut_before_it_is_sent(standin, backend):
     [
         (4, AuthError, "Touch ID is required"),
         (5, AuthError, "detail from the helper"),
-        (6, HardwareError, "no longer accepts"),
+        (6, HardwareError, "does not accept this device key"),
         (3, HardwareError, "detail from the helper"),
         (2, HardwareError, "failed (2)"),
         (1, HardwareError, "failed (1)"),
@@ -534,14 +534,128 @@ def test_helper_status_names_the_helper_and_builds_nothing(monkeypatch):
     assert status == {
         "source": str(source), "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "path": str(macos_se._helper_path()), "built": False, "from_environment": False, "compiler": True,
-        "error": None,
+        "damaged": False, "error": None,
     }
     assert not paths.helper_dir().exists()  # nothing was written either
     helper = macos_se._helper_path()
     paths.ensure_dir(helper.parent)
     helper.write_bytes(b"#!/bin/sh\n")
+    macos_se._record_path(helper).write_text(hashlib.sha256(b"#!/bin/sh\n").hexdigest())
     _no_side_effects(monkeypatch)  # a helper that is there needs no compiler to be looked for
     assert macos_se.helper_status()["built"] is True and macos_se.helper_status()["compiler"] is None
+
+
+def test_helper_status_tells_a_cached_helper_that_is_not_the_one_compiled(monkeypatch):
+    """A truncated or replaced cache file is not "compiled": it is reported, and a compiler is looked for."""
+    monkeypatch.delenv("IRONDOME_SE_HELPER", raising=False)
+    helper = macos_se._helper_path()
+    paths.ensure_dir(helper.parent)
+    helper.write_bytes(b"#!/bin/sh\n")
+    macos_se._record_path(helper).write_text(hashlib.sha256(b"#!/bin/sh\n").hexdigest())
+    record = macos_se._record_path(helper)
+
+    def cut_off() -> None:
+        helper.write_bytes(b"#!/bin")
+
+    def without_its_record() -> None:
+        helper.write_bytes(b"#!/bin/sh\n")  # whole again: only the record is gone
+        record.unlink()
+
+    def with_another_record() -> None:
+        record.write_text("0" * 64)
+
+    for spoil in (cut_off, without_its_record, with_another_record):
+        spoil()
+        _no_side_effects(monkeypatch, compiler="/usr/bin/swiftc")
+        status = macos_se.helper_status()
+        assert (status["built"], status["damaged"], status["compiler"]) == (False, True, True), spoil.__name__
+
+
+def test_a_damaged_cached_helper_is_compiled_again(stand_in_compiler, backend):
+    """Found by hand on a Mac: a cut-off helper failed every command with "(-9): no detail" and was never rebuilt."""
+    helper = macos_se.build_helper()
+    assert macos_se._intact(helper) and len(stand_in_compiler) == 2
+    helper.write_bytes(helper.read_bytes()[:3])  # what a half-restored folder or a disk fault leaves
+    assert backend.passive_probe().detail.startswith("not probed: the compiled Secure Enclave helper is damaged")
+    assert macos_se.build_helper() == helper and len(stand_in_compiler) == 4  # announced and compiled once more
+    assert macos_se._intact(helper)
+    assert macos_se.build_helper() == helper and len(stand_in_compiler) == 4  # and cached again
+
+
+def test_a_damaged_helper_that_cannot_be_compiled_again_says_what_to_install(stand_in_compiler, monkeypatch):
+    helper = macos_se.build_helper()
+    helper.write_bytes(b"")
+    monkeypatch.setattr(macos_se, "_find_swiftc", lambda: None)
+    with pytest.raises(HardwareError, match="is damaged, and compiling it again needs the Xcode Command Line Tools"):
+        macos_se.build_helper()
+
+
+def test_a_refused_key_names_the_remedy_that_fits_the_key():
+    """Found by hand on a Mac: a password vault with a damaged key file was told to enrol Touch ID."""
+    with pytest.raises(HardwareError) as device:
+        macos_se._raise_for(6, b"", touch=False)
+    assert "irondome recovery use" in str(device.value) and "touchid" not in str(device.value)
+    assert "fingerprint" not in str(device.value)
+    with pytest.raises(HardwareError) as touch:
+        macos_se._raise_for(6, b"", touch=True)
+    assert "irondome auth touchid" in str(touch.value)
+    for kind in (True, False):  # a key refused the moment it was made is neither a damaged file nor a changed finger
+        with pytest.raises(HardwareError) as fresh:
+            macos_se._raise_for(6, b"", touch=kind, fresh=True)
+        assert str(fresh.value) == "this Mac's Secure Enclave refused the key it had just made"
+
+
+def test_a_key_refused_at_enrolment_is_not_called_a_damaged_file(standin, backend):
+    standin.answer(agree=standin.fail(6))
+    with pytest.raises(HardwareError, match="refused the key it had just made"):
+        backend.enroll(policy=POLICY_DEVICE, auth=None, reason="test")
+
+
+def test_a_helper_that_cannot_be_recorded_says_so_and_not_that_it_did_not_compile(stand_in_compiler, monkeypatch):
+    real = paths.write_atomic
+
+    def no_record(path, data):
+        if str(path).endswith(".sha256"):
+            raise OSError(28, "No space left on device", str(path))
+        return real(path, data)
+
+    monkeypatch.setattr(paths, "write_atomic", no_record)
+    with pytest.raises(HardwareError, match="compiled the Secure Enclave helper, but could not record it"):
+        macos_se.build_helper()
+
+
+def test_a_helper_compiled_by_another_process_while_this_one_waited_is_not_compiled_again(
+    stand_in_compiler, monkeypatch
+):
+    """Two first runs at once: the second finds the first one's helper once it has the build lock."""
+    helper = macos_se._helper_path()
+    real_lock = paths.file_lock
+    from contextlib import contextmanager
+
+    @contextmanager
+    def lock_after_the_other_built(path=None):
+        with real_lock(path):
+            if not helper.exists():  # what the other process did while this one waited for the lock
+                helper.write_bytes(b"#!/bin/sh\n")
+                os.chmod(helper, 0o700)
+                macos_se._record_path(helper).write_text(hashlib.sha256(b"#!/bin/sh\n").hexdigest())
+            yield
+
+    monkeypatch.setattr(paths, "file_lock", lock_after_the_other_built)
+    assert macos_se.build_helper() == helper
+    assert stand_in_compiler == []  # nothing announced, nothing compiled
+
+
+def test_fault_tells_a_key_file_that_cannot_be_the_key(standin, backend):
+    descriptor = enrolled(backend)
+    assert backend.fault(descriptor) is None
+    path = state_file(descriptor)
+    whole = path.read_bytes()
+    for spoiled in (whole[:200], b""):
+        path.write_bytes(spoiled)
+        assert backend.exists(descriptor) and backend.fault(descriptor) == "the Secure Enclave key file is damaged"
+    path.unlink()
+    assert backend.fault(descriptor) is None  # absent is what exists() reports
 
 
 def test_helper_status_of_an_override_and_of_an_unreadable_source(monkeypatch, tmp_path):
@@ -1047,7 +1161,7 @@ def test_real_blob_from_another_machine_is_rejected(enclave):
     flipped[len(flipped) // 2] ^= 0x01
     for foreign in (os.urandom(len(real_blob)), os.urandom(64), real_blob[:-1], bytes(flipped)):
         path.write_text(json.dumps(dict(state, key=b64(foreign))))
-        with pytest.raises(HardwareError, match="no longer accepts"):
+        with pytest.raises(HardwareError, match="does not accept this device key.*irondome recovery use"):
             enclave.unseal(descriptor, auth=None, interactive=False, reason="test")
     path.write_text(json.dumps(state))
     enclave.unseal(descriptor, auth=None, interactive=False, reason="test").wipe()

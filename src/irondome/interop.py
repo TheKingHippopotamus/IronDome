@@ -80,7 +80,7 @@ from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Set
 from urllib.parse import urlsplit
 
 from irondome.errors import UsageError
-from irondome.vault import FIELDS, validate_alias, validate_name, without_control
+from irondome.vault import FIELDS, fold_name, validate_alias, validate_name, without_control
 
 __all__ = [
     "MAX_FILE_BYTES",
@@ -402,20 +402,20 @@ class _Fields:
 
 def _disambiguate(entries: List[ImportedEntry]) -> None:
     """Give every entry of one file a name no other entry of that file has (ignoring case)."""
-    shared = Counter(entry.name.casefold() for entry in entries)
+    shared = Counter(fold_name(entry.name) for entry in entries)
     taken: Set[str] = set()
     for entry in entries:
         name = entry.name
-        if shared[name.casefold()] > 1:
+        if shared[fold_name(name)] > 1:
             user = _label(entry.username, _USER_IN_NAME_LIMIT)
             if user:
                 name = _fit(name, f" ({user})")
         candidate = name
         number = 1
-        while candidate.casefold() in taken:
+        while fold_name(candidate) in taken:
             number += 1
             candidate = _fit(name, f" ({number})")
-        taken.add(candidate.casefold())
+        taken.add(fold_name(candidate))
         entry.name = candidate
 
 

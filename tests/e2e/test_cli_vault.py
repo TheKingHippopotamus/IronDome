@@ -1811,7 +1811,7 @@ LIST_SHAPES = {
     "config ls": ({"bunker", "settings"}, "settings", {"key", "value", "default", "minimum", "maximum", "help"}),
     "auth show": ({"bunker", "mode", "keyslots"}, "keyslots", {"id", "kind", "label", "describe", "created",
                                                               "backend", "policy", "hardware", "device_present",
-                                                              "kdf"}),
+                                                              "device_fault", "kdf"}),
 }
 
 

@@ -392,6 +392,8 @@ def test_plan_lists_exactly_what_execute_deletes_and_nothing_of_irondome_is_left
     paths.ensure_dir(helper.parent)
     helper.write_bytes(b"\xcf\xfa\xed\xfe a compiled helper")
     helper.with_name(f".build-{os.getpid()}-{helper.name}").write_bytes(b"half a helper")
+    helper.with_name(helper.name + ".sha256").write_text("0" * 64)  # the record a compile leaves beside it
+    helper.with_name(".tmp-abcd1234").write_bytes(b"half a record")
     everything = files_below(paths.root(), paths.device_root())
     planned = nuke.plan()
 

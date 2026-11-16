@@ -181,7 +181,7 @@ narrow, short-lived grants, and rotate what they used.
 | Touch ID | Enforced by the Secure Enclave on the key operation, not by a prompt in front of a readable key |
 | Wrong guesses | On a TPM, checked and rate-limited by the chip |
 | Memory | IronDome keeps keys in pages outside the Python heap, locked into RAM where the system allows it, and wipes them; a test scans process memory to prove it. Argon2id inside the `cryptography` library leaves a copy of what it is given: IronDome gives it the prehash, never the master password, and gets that copy overwritten by deriving again from zeros, best effort (see the claim's boundary) |
-| Self-destruct | `irondome nuke` destroys the device secrets first: a restored copy of the vault no longer opens with the master password (a recovery key you kept still opens it, and so does a backup made with `irondome export`) |
+| Self-destruct | `irondome nuke` destroys the device secrets first: a restored copy of the vault files no longer opens with the master password (a recovery key you kept still opens it, and so does a backup made with `irondome export`; a copy of the device folder is the other thing to destroy, see the limits below) |
 | Network | None: no module imports a networking library, and every command works with socket creation disabled |
 | Dependencies | One direct dependency: [`cryptography`](https://cryptography.io), which brings `cffi` and `pycparser` (and `typing-extensions` on Python 3.9 and 3.10) |
 
@@ -191,7 +191,7 @@ and who it does not.
 ## Verify it yourself
 
 ```console
-$ irondome verify            # runs the claim checks against this machine
+$ irondome verify            # runs the claim checks against this machine (a minute or two)
 $ irondome verify --touch    # also proves Touch ID with your finger
 $ irondome doctor            # which chip, which backend, file modes, memory locking
 ```
@@ -249,6 +249,21 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   copy opens; create the vault with `--no-recovery` if you would rather lose
   the data. A portable backup made with `irondome export` opens with its own
   password wherever it is.
+* **A copy of the device folder outlives `nuke` as well.** On a Mac the
+  device key is a sealed file that only this Mac's Secure Enclave can use,
+  in `~/Library/Application Support/IronDome/device`; `nuke`, `rekey`,
+  `passwd` and `bunker rm` destroy keys by deleting such files.
+  IronDome marks that folder as left out of Time Machine when it creates
+  it. A clone, a disk
+  image, a local snapshot of the disk or a backup program that does not read
+  the mark can still hold it: put back on this Mac together with the vault,
+  it opens with the master password, or with a token that was valid when the
+  copy was made. The file-based device key on any system is the same. The
+  other side of it: a restore of the Mac from Time Machine comes back
+  without that folder (that is what the mark asks for; no backup was run to
+  see it), and then the recovery key is what opens the vault
+  (`irondome recovery use`). A vault made with `--no-recovery` does not
+  survive such a restore.
 * **Bunkers separate vaults, not operating-system accounts.** Every bunker
   belongs to the same user; malware running as that user faces each of them
   the same way.

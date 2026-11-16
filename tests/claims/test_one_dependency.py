@@ -27,8 +27,8 @@ STDLIB = frozenset(
     """
     __future__ abc argparse ast atexit base64 binascii codecs collections contextlib copy csv ctypes dataclasses
     datetime difflib errno fcntl fnmatch functools gc getpass grp hashlib heapq hmac importlib io itertools json math
-    mmap msvcrt os pathlib platform pwd queue re resource secrets selectors shlex shutil signal stat string struct
-    subprocess sys tempfile termios textwrap threading time traceback typing unicodedata urllib winreg
+    mmap msvcrt os pathlib platform plistlib pwd queue re resource secrets selectors shlex shutil signal stat string
+    struct subprocess sys tempfile termios textwrap threading time traceback typing unicodedata urllib winreg
     """.split()
 )
 

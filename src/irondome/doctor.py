@@ -38,6 +38,7 @@ import ctypes
 import ctypes.util
 import os
 import platform
+import shlex
 import stat
 import sys
 from pathlib import Path
@@ -119,7 +120,8 @@ def _helper(findings: _Findings) -> Optional[Dict[str, Any]]:
 
     status = macos_se.helper_status()  # compiles nothing, runs no helper, shows no prompt
     state: Dict[str, Any] = {
-        key: status[key] for key in ("source", "source_sha256", "path", "built", "from_environment", "compiler")
+        key: status[key]
+        for key in ("source", "source_sha256", "path", "built", "damaged", "from_environment", "compiler")
     }
     if status["error"] is not None:
         state.update(source_sha256=None, path=None, built=False, compiler=None)
@@ -137,6 +139,15 @@ def _helper(findings: _Findings) -> Optional[Dict[str, Any]]:
         findings.add(
             "problem", "secure-enclave-helper", f"IRONDOME_SE_HELPER names {helper}, which does not exist",
             "point IRONDOME_SE_HELPER at the compiled helper, or unset it",
+        )
+        return state
+    if state["damaged"]:
+        findings.add(
+            "warning", "secure-enclave-helper",
+            f"the compiled Secure Enclave helper {helper} is not the file IronDome compiled (damaged or replaced), "
+            "so the Secure Enclave was not probed"
+            + ("; it is compiled again the next time a vault uses the chip" if state["compiler"] else ""),
+            "" if state["compiler"] else "run: xcode-select --install",
         )
         return state
     if state["compiler"]:
@@ -256,6 +267,14 @@ def _device_present(slot_device: Dict[str, Any]) -> Optional[bool]:
         return None
 
 
+def _device_fault(slot_device: Dict[str, Any]) -> Optional[str]:
+    """Why a device key file that is there cannot be the key, as its backend tells without using the chip."""
+    try:
+        return devices.get_backend(str(slot_device.get("backend"))).fault(slot_device)
+    except Exception:  # as above: not known
+        return None
+
+
 def _vault(bunker: str, hardware: List[str], findings: _Findings) -> Dict[str, Any]:
     path = paths.vault_file()
     state: Dict[str, Any] = {
@@ -280,18 +299,23 @@ def _vault(bunker: str, hardware: List[str], findings: _Findings) -> Dict[str, A
     state.update(readable=True, generation=file.generation, created=file.created)
     missing = 0
     bound = 0
+    damaged = 0
     backends = set()
     for slot in file.slots:
         present = _device_present(slot.device) if slot.device is not None else None
+        fault = _device_fault(slot.device) if slot.device is not None else None
         if slot.device is not None:
             bound += 1
             backends.add(str(slot.device.get("backend")))
             if present is False:
                 missing += 1
+            elif fault is not None:
+                damaged += 1
         state["keyslots"].append(
             {
                 "id": slot.id[:12], "kind": slot.kind, "label": slot.label, "description": slot.describe(),
                 "backend": slot.backend_name, "policy": slot.policy, "device_key_present": present,
+                "device_key_fault": fault,
             }
         )
     has_recovery = any(slot.kind == KIND_RECOVERY for slot in file.slots)
@@ -306,11 +330,21 @@ def _vault(bunker: str, hardware: List[str], findings: _Findings) -> Dict[str, A
             "warning", "device-keys", f"{missing} of this vault's device keys are missing from this machine",
             "remove the keyslots that no longer open, or re-key: irondome rekey",
         )
-    elif bound:
+    elif bound and not damaged:
         findings.add("ok", "device-keys", "every device key this vault needs is on this machine")
+    if damaged:
+        findings.add(
+            "problem", "device-keys",
+            f"{damaged} of this vault's device key files {'is' if damaged == 1 else 'are'} damaged: the keyslots "
+            "that need them cannot open",
+            "open the vault with the recovery key (irondome recovery use), or restore a portable backup",
+        )
     if not has_recovery:
         findings.add(
-            "note", "recovery", "this vault has no recovery key: if this machine's chip fails, nothing else opens it",
+            "note", "recovery",
+            "this vault has no recovery key: if this machine's chip fails, nothing else opens it"
+            + (", and neither does a restore of this Mac from Time Machine, which leaves the device key out"
+               if sys.platform == "darwin" else ""),
             "add one with: irondome recovery",
         )
     if _SOFTWARE in backends and hardware:
@@ -320,6 +354,26 @@ def _vault(bunker: str, hardware: List[str], findings: _Findings) -> Dict[str, A
             "move it into the chip with: irondome rekey",
         )
     return state
+
+
+def _backup(findings: _Findings) -> Optional[Dict[str, Any]]:
+    """macOS: whether the device directory carries the mark that keeps it out of Time Machine. None elsewhere."""
+    root = paths.device_root()
+    if not root.is_dir():
+        return None
+    excluded = paths.excluded_from_backup(root)
+    if excluded is None:
+        return None
+    if excluded:
+        findings.add("ok", "backup", "the device keys are marked as left out of Time Machine backups")
+    else:
+        findings.add(
+            "warning", "backup",
+            f"{root}, which holds the device keys, is not marked as left out of Time Machine: a backup that holds "
+            "it can open a vault on this Mac after nuke, rekey or passwd destroyed its keys",
+            f"run: tmutil addexclusion {shlex.quote(str(root))}",
+        )
+    return {"device_root": str(root), "excluded": excluded}
 
 
 def _mode_text(mode: int) -> str:
@@ -586,6 +640,7 @@ def collect() -> Dict[str, Any]:
         report["vault"] = None
         report["sessions"] = None
     report["permissions"] = _guarded("permissions", findings, lambda: _permissions(findings))
+    report["backup"] = _guarded("backup", findings, lambda: _backup(findings))
     report["memory"] = _guarded("memory", findings, lambda: _memory(findings))
     report["clipboard"] = _guarded("clipboard", findings, lambda: _clipboard(findings))
     tpm_in_use = report["new_vault_backend"] == _TPM or any(

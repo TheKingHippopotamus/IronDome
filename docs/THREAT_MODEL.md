@@ -194,11 +194,25 @@ How final the destruction of the device secret is depends on the backend:
 
 * **TPM 2.0:** the secret existed only inside the chip. The chip deletes it.
 * **Secure Enclave:** the private key never left the chip, and what is deleted
-  is the sealed blob that names it. A forensic lab that recovered that blob
-  from the SSD would still need *this Mac's* Secure Enclave to use it, and
-  under a Touch ID policy your finger as well.
+  is the sealed blob that names it, a file in the device directory. A copy of
+  that file works again in *this Mac's* Secure Enclave (under a Touch ID
+  policy, with your finger as well) and nowhere else. No forensic lab is
+  needed for such a copy to exist: any backup, clone or snapshot of the home
+  folder that holds `~/Library/Application Support/IronDome/device` has it.
+  IronDome marks that directory as left out of Time Machine when it creates
+  it (`irondome doctor` reports the mark). The mark does nothing about a
+  clone, a disk image, a local snapshot of the disk, or a backup program that
+  does not read it. Whoever puts such a copy back on this Mac, next to a copy
+  of the vault, opens the vault with the master password, or with a session
+  or grant token that was valid when the copy was made. This was found by
+  using the product by hand, not by its tests: they restored the vault
+  directory alone.
 * **File-based:** the device key file is overwritten and unlinked. On an SSD
-  that is best effort. `irondome status` tells you which backend you have.
+  that is best effort, and a copy of the device directory in a backup opens
+  the vault as above. `irondome status` tells you which backend you have.
+
+The same holds for everything else that ends by deleting a device key:
+`rekey`, `passwd`, removing a bunker.
 
 A recovery key on paper is not reachable by `nuke`. If a copy of the vault
 file survives somewhere and the recovery key survives too, that copy opens.

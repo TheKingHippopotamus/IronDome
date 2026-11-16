@@ -45,6 +45,7 @@ import json
 import os
 import re
 import time
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
@@ -66,6 +67,7 @@ __all__ = [
     "VaultFile",
     "Vault",
     "validate_name",
+    "fold_name",
     "validate_alias",
     "validate_field_name",
     "without_control",
@@ -127,10 +129,23 @@ def without_control(text: str) -> str:
     return "".join(char for char in text if not _is_control(char))
 
 
+def fold_name(name: str) -> str:
+    """*name* as names are compared: one Unicode form, without regard to letter case.
+
+    "café" typed with one code point for the accented letter and typed with two (what macOS file names
+    and many pastes carry) is one name, as "GitHub" and "github" are.
+    """
+    return unicodedata.normalize("NFC", unicodedata.normalize("NFC", name).casefold())
+
+
 def validate_name(name: Any) -> str:
-    """Entry names are free text, but never empty, padded or holding control characters."""
+    """Entry names are free text, but never empty, padded or holding control characters.
+
+    Returns the name in the one Unicode form (NFC) in which names are stored.
+    """
     if not isinstance(name, str) or not name:
         raise UsageError("an entry needs a name")
+    name = unicodedata.normalize("NFC", name)
     if name != name.strip():
         raise UsageError("an entry name cannot start or end with whitespace")
     if len(name) > 200:
@@ -612,21 +627,28 @@ class Vault:
     # -- lookup ---------------------------------------------------------------
 
     def find(self, name: str) -> Entry:
-        """Find an entry by exact name, then case-insensitively if that is unambiguous."""
-        for entry in self.entries.values():
-            if entry.name == name:
-                return entry
-        folded = name.casefold()
-        matches = [entry for entry in self.entries.values() if entry.name.casefold() == folded]
+        """Find an entry by exact name, then without regard to case or Unicode form if that is unambiguous.
+
+        Exactly as typed first: a vault written before names were stored in one form may hold a name in
+        another, and typing it that way must still reach it.
+        """
+        for spelling in (name, unicodedata.normalize("NFC", name)):
+            for entry in self.entries.values():
+                if entry.name == spelling:
+                    return entry
+        folded = fold_name(name)
+        matches = [entry for entry in self.entries.values() if fold_name(entry.name) == folded]
         if len(matches) == 1:
             return matches[0]
         if len(matches) > 1:
-            raise UsageError(f"{name!r} matches several entries that differ only in case; use the exact name")
+            raise UsageError(
+                f"{name!r} matches several entries that differ only in case or Unicode form; use the exact name"
+            )
         raise NotFoundError(f"no entry named {name!r}")
 
     def has_name(self, name: str) -> bool:
-        folded = name.casefold()
-        return any(entry.name.casefold() == folded for entry in self.entries.values())
+        folded = fold_name(name)
+        return any(fold_name(entry.name) == folded for entry in self.entries.values())
 
     def _named(self, name: str) -> Optional[Entry]:
         """:meth:`find`, but ``None`` instead of :class:`NotFoundError`."""
@@ -727,19 +749,20 @@ class Vault:
         an importer asks first, to choose another name instead.
         """
         own = entry.id if entry is not None else None
-        folded = name.casefold()
-        for alias_name, alias in sorted(self.aliases.items()):
-            if alias.entry != own and alias_name.casefold() == folded:
+        folded = fold_name(name)
+        # The alias spelled exactly so first: it is the one the person means when two differ only in case.
+        for alias_name, alias in sorted(self.aliases.items(), key=lambda item: (item[0] != name, item[0])):
+            if alias.entry != own and fold_name(alias_name) == folded:
                 target = self.entries.get(alias.entry)
                 where = f" (it points at {target.name!r})" if target is not None else ""
                 return f"the alias {alias_name}{where} has that name"
         head, slash, tail = name.rpartition("/")
         if slash and head and tail:
             # Without regard to case, as find() matches names: "GitHub/PASSWORD" is found as "github/password".
-            folded_head = head.casefold()
-            heads = [item for item in self.entries.values() if item.name.casefold() == folded_head]
+            folded_head = fold_name(head)
+            heads = [item for item in self.entries.values() if fold_name(item.name) == folded_head]
             heads += [self.entries[item.entry] for alias_name, item in sorted(self.aliases.items())
-                      if alias_name.casefold() == folded_head and item.entry in self.entries]
+                      if fold_name(alias_name) == folded_head and item.entry in self.entries]
             for owner in heads:
                 if owner.id != own and (tail.casefold() in FIELDS or _folded_field(tail, self._fields_of(owner))):
                     return f"the reference {name!r} already means the field {tail!r} of {owner.name!r}"
@@ -754,13 +777,13 @@ class Vault:
 
     def _shadowed(self, heads: Iterable[str], fields: Iterable[Any], own: Optional[str]) -> Optional[str]:
         """Why an entry ``head/field`` clashes: *head* one of *heads*, *field* a built-in or one of *fields*."""
-        wanted = {head.casefold() for head in heads}
+        wanted = {fold_name(head) for head in heads}
         held = list(fields)
         for other in self.entries.values():
             if other.id == own:
                 continue
             head, slash, tail = other.name.rpartition("/")
-            if slash and head and tail and head.casefold() in wanted and _folded_field(tail, held):
+            if slash and head and tail and fold_name(head) in wanted and _folded_field(tail, held):
                 return (
                     f"the reference {other.name!r} would then mean the field {tail!r} of {head!r} as well as "
                     f"the entry {other.name!r}"
@@ -774,20 +797,20 @@ class Vault:
             wanted = tag.casefold()
             result = [entry for entry in result if any(item.casefold() == wanted for item in entry.tags)]
         if query:
-            needle = query.casefold()
+            needle = fold_name(query)
             alias_names: Dict[str, List[str]] = {}
             for name, alias in self.aliases.items():
                 alias_names.setdefault(alias.entry, []).append(name)
             result = [
                 entry
                 for entry in result
-                if needle in entry.name.casefold()
-                or needle in entry.username.casefold()
-                or needle in entry.url.casefold()
-                or any(needle in item.casefold() for item in entry.tags)
-                or any(needle in item.casefold() for item in alias_names.get(entry.id, []))
+                if needle in fold_name(entry.name)
+                or needle in fold_name(entry.username)
+                or needle in fold_name(entry.url)
+                or any(needle in fold_name(item) for item in entry.tags)
+                or any(needle in fold_name(item) for item in alias_names.get(entry.id, []))
             ]
-        return sorted(result, key=lambda entry: (entry.name.casefold(), entry.name))
+        return sorted(result, key=lambda entry: (fold_name(entry.name), entry.name))
 
     def aliases_of(self, entry: Entry) -> List[str]:
         return sorted(name for name, alias in self.aliases.items() if alias.entry == entry.id)
@@ -892,7 +915,7 @@ class Vault:
         printed, and on a terminal those characters are escape sequences. Notes and values may.
         A name that would give a reference two meanings is refused (see :meth:`conflict`).
         """
-        validate_name(name)
+        name = validate_name(name)
         if not self.has_name(name) and isinstance(secret, Secret) and isinstance(secret.fields, dict):
             reason = self.conflict(name, secret.fields)
             if reason is not None:
@@ -916,7 +939,7 @@ class Vault:
         created: Optional[int],
         modified: Optional[int],
     ) -> Entry:
-        validate_name(name)
+        name = validate_name(name)
         if self.has_name(name):
             raise UsageError(f"an entry named {name!r} already exists")
         if kind not in _KINDS:
@@ -971,9 +994,10 @@ class Vault:
             raise NotFoundError(f"no entry named {entry.name!r}")
         new_name = current.name
         renamed = False
+        if name is not None:
+            name = validate_name(name)
         if name is not None and name != current.name:
-            validate_name(name)
-            renamed = name.casefold() != current.name.casefold()
+            renamed = fold_name(name) != fold_name(current.name)
             if renamed and self.has_name(name):
                 raise UsageError(f"an entry named {name!r} already exists")
             new_name = name
@@ -1065,14 +1089,14 @@ class Vault:
         if field_name == "name":
             raise UsageError("an alias must point at a value, not at the entry name")
         target = self.entries[entry.id]
-        folded = alias.casefold()
-        named = [item.name for item in self.entries.values() if item.id != target.id and item.name.casefold() == folded]
+        folded = fold_name(alias)
+        named = [item.name for item in self.entries.values() if item.id != target.id and fold_name(item.name) == folded]
         if named:
             raise UsageError(
                 f"the alias {alias} cannot be set: the entry {min(named)!r} has that name, and a reference "
                 "must mean one thing; choose another alias"
             )
-        if any(other.name.casefold().startswith(folded + "/") for other in self.entries.values()):
+        if any(fold_name(other.name).startswith(folded + "/") for other in self.entries.values()):
             reason = self._shadowed([alias], self._fields_of(target), target.id)
             if reason is not None:
                 raise UsageError(

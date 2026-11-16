@@ -111,7 +111,7 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from irondome import paths
 from irondome.errors import AuthError, IronDomeError, UsageError, VaultError
 from irondome.secmem import BufferLike, SecureBuffer, _wipe_str, as_view, wipe_bytes
-from irondome.vault import Entry, Secret, Vault, validate_name, without_control
+from irondome.vault import Entry, Secret, Vault, fold_name, validate_name, without_control
 
 __all__ = [
     "LAYOUT_SECRETS",
@@ -1132,20 +1132,20 @@ def _plan_names(entries: Sequence[LegacyEntry]) -> List[str]:
     ... after that for whatever still collides.
     """
     bases = [_fit(_clean(entry.website) or _UNTITLED) for entry in entries]
-    shared = Counter(base.casefold() for base in bases)
+    shared = Counter(fold_name(base) for base in bases)
     taken: Set[str] = set()
     names = []
     for entry, base in zip(entries, bases):
         name = base
         user = _clean(entry.username)[:_USER_IN_NAME_LIMIT].rstrip()
-        if shared[base.casefold()] > 1 and user:
+        if shared[fold_name(base)] > 1 and user:
             name = _fit(base, f" ({user})")
         candidate = name
         number = 1
-        while candidate.casefold() in taken:
+        while fold_name(candidate) in taken:
             number += 1
             candidate = _fit(name, f" ({number})")
-        taken.add(candidate.casefold())
+        taken.add(fold_name(candidate))
         names.append(validate_name(candidate))
     return names
 
@@ -1181,7 +1181,7 @@ def _label(entry: LegacyEntry) -> str:
 
 def _names_in(vault: Vault) -> Dict[str, Entry]:
     """The vault's entries by case-folded name, which is how the vault itself tells names apart."""
-    return {existing.name.casefold(): existing for existing in vault.entries.values()}
+    return {fold_name(existing.name): existing for existing in vault.entries.values()}
 
 
 def _username(entry: LegacyEntry) -> str:
@@ -1252,7 +1252,7 @@ def import_into(vault: Vault, entries: Sequence[LegacyEntry]) -> MigrationReport
             name: Optional[str] = planned
             number = 1
             while name is not None:
-                existing = present.get(name.casefold())
+                existing = present.get(fold_name(name))
                 if existing is None:
                     break
                 if _difference(vault, existing, entry) is None:
@@ -1276,7 +1276,7 @@ def import_into(vault: Vault, entries: Sequence[LegacyEntry]) -> MigrationReport
                 report.skipped.append(f"{_label(entry)}: {exc}")
                 continue
             added.append(created)
-            present[name.casefold()] = created
+            present[fold_name(name)] = created
             if name != entry.website:
                 report.renamed.append((entry.website, name))
             if created.username != entry.username:
@@ -1309,7 +1309,7 @@ def verify(vault: Vault, entries: Sequence[LegacyEntry]) -> List[str]:
         number = 1
         first_difference: Optional[str] = None
         while True:
-            existing = present.get(name.casefold())
+            existing = present.get(fold_name(name))
             if existing is None:
                 problems.append(f"{_label(entry)}: {first_difference or 'is not in the vault'}")
                 break

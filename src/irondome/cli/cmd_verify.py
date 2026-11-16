@@ -68,6 +68,8 @@ def verify(ctx: Context, args: argparse.Namespace) -> int:
     ctx.out.info(
         "Running IronDome's claim checks in a private temporary directory. Your own vaults are not opened."
     )
+    if not claims:
+        ctx.out.info("Every claim is checked on this machine: this takes a minute or two.")
     if touch:
         ctx.out.info("One check will ask for Touch ID: touch the sensor when the prompt appears.")
     report = selftest.run(claims or None, touch=touch, progress=ctx.out.info)

@@ -293,6 +293,7 @@ def _slot_info(slot: Keyslot) -> Dict[str, Any]:
         "policy": slot.policy,
         "hardware": None,
         "device_present": None,
+        "device_fault": None,
         "kdf": None,
     }
     if slot.kind == KIND_PASSWORD and slot.kdf is not None:
@@ -305,6 +306,7 @@ def _slot_info(slot: Keyslot) -> Dict[str, Any]:
             backend = devices.get_backend(str(slot.backend_name))
             info["hardware"] = devices.hardware_here(backend)
             info["device_present"] = bool(backend.exists(slot.device))
+            info["device_fault"] = backend.fault(slot.device)
         except (IronDomeError, OSError):
             pass  # an unknown backend or a damaged descriptor: reported as unknown
     return info
@@ -864,7 +866,11 @@ def _create(ctx: Context, args: argparse.Namespace) -> int:
         if recovery is not None:
             _show_recovery_key(ctx, recovery, name)
         else:
-            ctx.out.warn("there is no recovery key: if this machine or its security chip is lost, so is this vault")
+            ctx.out.warn(
+                "there is no recovery key: if this machine or its security chip is lost, so is this vault"
+                + (" (a restore of this Mac from Time Machine counts: it leaves the device key out)"
+                   if sys.platform == "darwin" else "")
+            )
     _legacy_hint(ctx)
     ctx.out.info("Next: irondome add NAME --generate stores a new login with a generated password.")
     return 0
@@ -940,7 +946,10 @@ def _slot_line(info: Dict[str, Any]) -> str:
         return f"{info['describe']} (not bound to this device)"
     present = {True: "device key present", False: "device key MISSING: this keyslot cannot open", None: "unknown"}
     cost = f"; {info['kdf']}" if info.get("kdf") else ""
-    return f"{_safe(info['describe'])} -- {present[info['device_present']]}{cost}"
+    state = present[info["device_present"]]
+    if info.get("device_fault"):
+        state = "device key file DAMAGED: this keyslot cannot open"
+    return f"{_safe(info['describe'])} -- {state}{cost}"
 
 
 def _print_status(ctx: Context, document: Dict[str, Any]) -> None:
@@ -2139,7 +2148,7 @@ def _auth_show(ctx: Context, args: argparse.Namespace) -> int:
             (
                 str(info["kind"]),
                 _safe(info["describe"]),
-                present[info["device_present"]],
+                "DAMAGED" if info.get("device_fault") else present[info["device_present"]],
                 format_time(info["created"]),
                 str(info["id"])[:8],
             )
@@ -2639,7 +2648,9 @@ _JSON_KEYSLOTS = """\
 json (--json):
   {"bunker": NAME, "mode": MODE, "keyslots": [KEYSLOT, ...]}
   KEYSLOT: id, kind, label, describe, created, backend, policy, hardware,
-           device_present, kdf (the Argon2id cost of a password keyslot)"""
+           device_present, device_fault (why a device key file that is
+           there cannot be the key, or null), kdf (the Argon2id cost of a
+           password keyslot)"""
 
 
 def _add_setup_options(parser: argparse.ArgumentParser) -> None:
@@ -3071,7 +3082,10 @@ def register(subparsers: Any, common: argparse.ArgumentParser) -> None:
             ("irondome bunker create work --mode touchid", "opened by Touch ID"),
         ],
     )
-    action.add_argument("name", metavar="NAME", help="a lower-case letter, then letters, digits or hyphens")
+    action.add_argument(
+        "name", metavar="NAME",
+        help="a lower-case letter, then lower-case letters, digits or hyphens (32 characters at most)",
+    )
     _add_setup_options(action)
     _command(
         actions, common, "ls", _bunker_ls, "list the bunkers; needs no unlock",

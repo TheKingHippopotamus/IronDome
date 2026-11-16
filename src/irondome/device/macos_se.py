@@ -86,6 +86,8 @@ _TOUCH_TIMEOUT = 180.0
 #: sets it below its client's request timeout, so a prompt never outlives the request.
 ENV_TOUCH_TIMEOUT = "IRONDOME_TOUCH_TIMEOUT"
 _BUILD_TIMEOUT = 600.0
+#: Held while the helper is compiled, in the helper directory.
+_BUILD_LOCK = ".build.lock"
 
 #: Where system tools are looked up. The caller's PATH is never consulted.
 _SAFE_PATH = "/usr/bin:/bin"
@@ -145,6 +147,25 @@ def _helper_path() -> Path:
         return Path(override)
     digest = hashlib.sha256(helper_source().read_bytes()).hexdigest()[:16]
     return paths.helper_dir() / f"irondome-se-{digest}"
+
+
+def _record_path(helper: Path) -> Path:
+    """Where the SHA-256 of the compiled helper is kept, beside it."""
+    return helper.with_name(helper.name + ".sha256")
+
+
+def _intact(helper: Path) -> bool:
+    """Whether the cached *helper* is, byte for byte, the file that was compiled here.
+
+    This catches a damaged cache (a truncated file, a disk fault, a half-restored folder), so that it is
+    compiled again instead of failing every command. It is no defence against a program running as you:
+    whatever can replace the helper can replace the record beside it.
+    """
+    try:
+        recorded = paths.read_file(_record_path(helper), limit=256).decode("ascii").strip()
+        return bool(recorded) and recorded == hashlib.sha256(paths.read_file(helper)).hexdigest()
+    except (OSError, VaultError, ValueError):
+        return False
 
 
 def _check_helper(path: Path) -> None:
@@ -219,6 +240,7 @@ def helper_status() -> Dict[str, Any]:
         "path": None,
         "built": False,
         "from_environment": bool(os.environ.get("IRONDOME_SE_HELPER")),
+        "damaged": False,
         "compiler": None,
         "error": None,
     }
@@ -231,7 +253,8 @@ def helper_status() -> Dict[str, Any]:
     except OSError:
         return status  # the cached helper is named after the source, which cannot be read
     status["path"] = str(helper)
-    status["built"] = helper.is_file()
+    status["built"] = helper.is_file() and (status["from_environment"] or _intact(helper))
+    status["damaged"] = helper.is_file() and not status["built"]
     if not status["built"] and not status["from_environment"]:
         status["compiler"] = _find_swiftc() is not None
     return status
@@ -241,8 +264,10 @@ def build_helper(force: bool = False) -> Path:
     """Compile the Secure Enclave helper from the packaged source, once.
 
     The binary is cached under the device directory and named after the hash
-    of its source, so an upgraded IronDome never runs a stale helper. A helper
-    named by ``IRONDOME_SE_HELPER`` is used as it is and never rebuilt. Before
+    of its source, so an upgraded IronDome never runs a stale helper. Its own
+    SHA-256 is recorded beside it, and a cached helper that no longer matches
+    the record (see :func:`_intact`) is compiled again. A helper named by
+    ``IRONDOME_SE_HELPER`` is used as it is and never rebuilt. Before
     the compiler starts, :func:`irondome.device.report_progress` says so: the
     first compile can take a minute, and the person should not have to guess.
     """
@@ -256,15 +281,36 @@ def build_helper(force: bool = False) -> Path:
             raise HardwareError(f"IRONDOME_SE_HELPER points at {target}, which does not exist")
         _check_helper(target)
         return target
-    if target.exists() and not force:
+    damaged = target.exists() and not _intact(target)
+    if target.exists() and not force and not damaged:
         _check_helper(target)
         return target
     swiftc = _find_swiftc()
     if not swiftc:
+        if damaged:
+            raise HardwareError(
+                f"the compiled Secure Enclave helper at {target} is damaged, and compiling it again needs the "
+                "Xcode Command Line Tools. Run: xcode-select --install"
+            )
         raise HardwareError(_NEEDS_TOOLS)
-    scratch = target.with_name(f".build-{os.getpid()}-{target.name}")
     try:
         paths.ensure_dir(target.parent)
+        # One build at a time: two at once could leave one's binary beside the other's record.
+        with paths.file_lock(target.parent / _BUILD_LOCK):
+            if not force and target.exists() and _intact(target):
+                _check_helper(target)  # another process compiled it while this one waited
+                return target
+            _compile(swiftc, target)
+    except OSError as exc:
+        raise HardwareError(f"could not compile the Secure Enclave helper: {exc.strerror or exc}") from None
+    _check_helper(target)
+    return target
+
+
+def _compile(swiftc: str, target: Path) -> None:
+    """Run the compiler, put its output at *target* and record that output's SHA-256 beside it."""
+    scratch = target.with_name(f".build-{os.getpid()}-{target.name}")
+    try:
         devices.report_progress(_COMPILING)
         result = subprocess.run(
             [swiftc, "-O", "-o", str(scratch), str(helper_source())],
@@ -278,6 +324,7 @@ def build_helper(force: bool = False) -> Path:
             tail = result.stderr.decode("utf-8", "replace").strip().splitlines()[-5:]
             raise HardwareError("could not compile the Secure Enclave helper: " + " | ".join(tail))
         os.chmod(scratch, 0o700)
+        digest = hashlib.sha256(paths.read_file(scratch)).hexdigest()
         os.replace(scratch, target)
     except subprocess.TimeoutExpired:
         raise HardwareError("compiling the Secure Enclave helper timed out") from None
@@ -289,8 +336,13 @@ def build_helper(force: bool = False) -> Path:
                 scratch.unlink()
             except OSError:
                 pass
-    _check_helper(target)
-    return target
+    try:
+        paths.write_atomic(_record_path(target), digest.encode("ascii"))
+    except OSError as exc:
+        raise HardwareError(
+            f"compiled the Secure Enclave helper, but could not record it beside it in {target.parent}: "
+            f"{exc.strerror or exc}"
+        ) from None
 
 
 def _parse_failure(stderr: bytes) -> Tuple[str, str]:
@@ -301,7 +353,11 @@ def _parse_failure(stderr: bytes) -> Tuple[str, str]:
         return "", stderr.decode("utf-8", "replace").strip()[:200]
 
 
-def _raise_for(status: int, stderr: bytes) -> None:
+def _raise_for(status: int, stderr: bytes, *, touch: bool = True, fresh: bool = False) -> None:
+    """Turn a failed helper run into the error a person can act on.
+
+    *touch*: the key is one a finger releases. *fresh*: the key was made a moment ago, by enroll.
+    """
     code, message = _parse_failure(stderr)
     if status == _EXIT_INTERACTION:
         raise AuthError(
@@ -310,12 +366,21 @@ def _raise_for(status: int, stderr: bytes) -> None:
         )
     if status == _EXIT_DENIED:
         raise AuthError(f"Touch ID did not authorise this: {message or code or 'refused'}")
+    said = f" (the Secure Enclave said: {message})" if message else ""
+    if status == _EXIT_KEY_UNUSABLE and fresh:
+        raise HardwareError(f"this Mac's Secure Enclave refused the key it had just made{said}")
+    if status == _EXIT_KEY_UNUSABLE and not touch:
+        # Said of any device key: a vault's, or the one its sessions and grants are bound to.
+        raise HardwareError(
+            "this Mac's Secure Enclave does not accept this device key: the key file is damaged, or another "
+            "Mac's chip made it (a home folder copied or restored from elsewhere). A vault whose key it is does "
+            f"not open with the master password here; the recovery key opens it: irondome recovery use{said}"
+        )
     if status == _EXIT_KEY_UNUSABLE:
         raise HardwareError(
             "this Mac's Secure Enclave no longer accepts the vault's key. That happens when "
             "fingerprints are added or removed, or when the vault came from another Mac. "
-            "Unlock with your master password or recovery key, then run: irondome auth touchid"
-            + (f" (the Secure Enclave said: {message})" if message else "")
+            f"Unlock with your master password or recovery key, then run: irondome auth touchid{said}"
         )
     if status == _EXIT_UNAVAILABLE:
         raise HardwareError(f"Secure Enclave unavailable: {message or code}")
@@ -375,8 +440,13 @@ class SecureEnclaveBackend(DeviceBackend):
             raise HardwareError("the Secure Enclave helper returned something unexpected")
         return payload
 
-    def _agree(self, key: str, peer: str, *, interactive: bool, reason: str) -> SecureBuffer:
-        """Run one key agreement in the chip; read the result into locked memory."""
+    def _agree(
+        self, key: str, peer: str, *, interactive: bool, reason: str, touch: bool = True, fresh: bool = False
+    ) -> SecureBuffer:
+        """Run one key agreement in the chip; read the result into locked memory.
+
+        *touch* and *fresh* say what kind of key it is, for the error if the chip refuses it.
+        """
         helper = build_helper()
         if os.environ.get("IRONDOME_NO_TOUCH") == "1":
             interactive = False  # a promise that no prompt appears, whoever is asking
@@ -433,7 +503,7 @@ class SecureEnclaveBackend(DeviceBackend):
                     raise AuthError("the Touch ID prompt was not answered in time")
                 raise HardwareError("the Secure Enclave helper did not answer in time")
             if status != 0:
-                _raise_for(status, detail)
+                _raise_for(status, detail, touch=touch, fresh=fresh)
             if got != DEVICE_SECRET_LEN or surplus:
                 raise HardwareError("the Secure Enclave helper returned a malformed secret")
         except BaseException:
@@ -512,7 +582,9 @@ class SecureEnclaveBackend(DeviceBackend):
         if not info.get("secure_enclave"):
             return Probe(self.name, False, True, False, "this Mac has no Secure Enclave")
         biometry = bool(info.get("biometry_usable"))
-        detail = "Secure Enclave" + (f" with {info.get('biometry')}" if biometry else ", no usable biometry")
+        sensors = {"touchid": "Touch ID", "faceid": "Face ID", "opticid": "Optic ID"}
+        sensor = sensors.get(str(info.get("biometry")), "biometry")
+        detail = "Secure Enclave" + (f", {sensor} available" if biometry else ", no usable biometry")
         return Probe(self.name, True, True, biometry, detail)
 
     def passive_probe(self) -> Probe:
@@ -533,6 +605,11 @@ class SecureEnclaveBackend(DeviceBackend):
             detail = f"the Secure Enclave helper source cannot be read: {status['error']}"
         elif status["from_environment"]:
             detail = f"IRONDOME_SE_HELPER points at {status['path']}, which does not exist"
+        elif status["damaged"]:
+            detail = f"{devices.NOT_PROBED}: the compiled Secure Enclave helper is damaged" + (
+                " (it is compiled again the next time a vault uses the chip)" if status["compiler"] else
+                ", and compiling it again needs the Xcode Command Line Tools: xcode-select --install"
+            )
         elif status["compiler"]:
             detail = (
                 f"{devices.NOT_PROBED}: the Secure Enclave helper is not compiled yet (it is compiled the first "
@@ -568,7 +645,8 @@ class SecureEnclaveBackend(DeviceBackend):
         except OSError as exc:
             raise HardwareError(f"could not store the Secure Enclave key: {exc.strerror or exc}") from None
         try:
-            secret = self._agree(key, peer, interactive=policy != POLICY_DEVICE, reason=reason)
+            needs_user = policy != POLICY_DEVICE
+            secret = self._agree(key, peer, interactive=needs_user, reason=reason, touch=needs_user, fresh=True)
         except BaseException:
             try:
                 paths.secure_delete(path)
@@ -587,7 +665,9 @@ class SecureEnclaveBackend(DeviceBackend):
     ) -> SecureBuffer:
         state = self._load_state(descriptor)
         needs_user = descriptor["policy"] != POLICY_DEVICE
-        return self._agree(state["key"], state["peer"], interactive=interactive and needs_user, reason=reason)
+        return self._agree(
+            state["key"], state["peer"], interactive=interactive and needs_user, reason=reason, touch=needs_user
+        )
 
     def destroy(self, descriptor: Dict[str, Any]) -> None:
         path = self._state_path(descriptor)
@@ -600,6 +680,15 @@ class SecureEnclaveBackend(DeviceBackend):
 
     def exists(self, descriptor: Dict[str, Any]) -> bool:
         return self._state_path(descriptor).is_file()
+
+    def fault(self, descriptor: Dict[str, Any]) -> Optional[str]:
+        if not self.exists(descriptor):
+            return None
+        try:
+            self._load_state(descriptor)
+        except HardwareError as exc:
+            return str(exc)
+        return None
 
     def destroy_all(self) -> int:
         directory = paths.device_dir()

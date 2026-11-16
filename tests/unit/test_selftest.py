@@ -455,3 +455,37 @@ def test_no_check_fails_on_a_tpm(tpm, tmp_path):
     assert [(outcome.claim, outcome.result.detail) for outcome in report.outcomes
             if outcome.result.status == selftest.FAIL] == []
     assert next(o.result.status for o in report.outcomes if o.claim == "bunkers-isolated") == selftest.PASS
+
+
+def test_a_whole_verify_says_how_long_it_takes_before_it_starts(monkeypatch):
+    """Found by hand on a Mac: the whole run took close to two minutes and said nothing first."""
+    import argparse
+
+    from irondome import selftest
+    from irondome.cli import cmd_verify
+
+    class Started(Exception):
+        pass
+
+    said = []
+
+    def run(claims, **kwargs):
+        raise Started
+
+    class Out:
+        json_mode = False
+
+        def info(self, text):
+            said.append(text)
+
+    class Ctx:
+        out = Out()
+
+    monkeypatch.setattr(selftest, "run", run)
+    with pytest.raises(Started):
+        cmd_verify.verify(Ctx(), argparse.Namespace(claims=None, touch=False))
+    assert any("this takes a minute or two" in line for line in said)
+    said.clear()
+    with pytest.raises(Started):
+        cmd_verify.verify(Ctx(), argparse.Namespace(claims=["recovery"], touch=False))
+    assert said and not any("this takes a minute or two" in line for line in said)

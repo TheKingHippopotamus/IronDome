@@ -180,6 +180,73 @@ then three). They are fixed in the entries above. A last pass ran the final
 three fixes as a checklist and found no fault in them, only wording, which
 was corrected.
 
+### Found by using it on a Mac
+
+Both trials above ran on Linux. A third one ran on a Mac, against its real
+Secure Enclave, in a throwaway home inside a macOS sandbox: the published
+texts, the release wheel, no source code, password mode only (nothing that
+needs a finger). What it found, and what was done:
+
+- **Copying both folders back undid `nuke`, on the same Mac.** The Secure
+  Enclave key is a sealed file under `~/Library/Application Support`, and
+  a whole-home backup holds it next to the vault. With both restored, the
+  master password opened the vault again, and so did a grant token and a
+  session token from before. `nuke` had printed that no copy of the vault
+  files would open. The documents said this only as a forensic-lab case, and
+  the tests restored the vault directory alone. Now the device directory is
+  marked as left out of Time Machine when it is created (the mark
+  `tmutil addexclusion` writes; `irondome doctor` reports it), `nuke` says
+  which copy it cannot reach, and README, THREAT_MODEL and the
+  `crypto-erase` claim say that a clone, a disk image, a local snapshot or a
+  backup program that ignores the mark still holds the key. A restore from
+  Time Machine then comes back without that folder (no backup was run to
+  see it), and the recovery key is what opens the vault; a vault made with
+  `--no-recovery` does not survive such a restore, and `init` and `doctor`
+  say so.
+- **A damaged Secure Enclave key file gave advice that could not work**: a
+  password vault was told that fingerprints had changed and to run
+  `irondome auth touchid`. For a key no finger releases the message now says
+  what happened and names `irondome recovery use`.
+- **A damaged compiled helper was never compiled again.** Every command
+  failed with "helper failed (-9): no detail", `doctor` called the helper
+  compiled and advised installing tools that were installed, and a new
+  vault quietly got a file-based key. The helper's SHA-256 is now recorded
+  beside it; one that does not match is compiled again (one build at a
+  time), and `doctor` says so.
+  This is a check against a damaged cache, not against a program running as
+  you, which can replace the record as well.
+- **"café" typed with one code point for the accented letter and with two
+  were two entries that looked the same.** Entry names are now stored and
+  compared in one Unicode form (NFC), as the master password already was.
+- `irondome status >&-` (a closed stdout) ended in a traceback; a closed
+  stdin, stdout or stderr is now the null device.
+- `status`, `auth show` and `doctor` called a cut-off or empty device key
+  file "present"; they now say it is damaged, and `doctor` exits 1 and names
+  the recovery key.
+- `import` compared names by letter case alone; a name in the other Unicode
+  form now meets the entry that is there, under whichever `--on-conflict`.
+- Wording: in password mode `init` no longer says "Secure Enclave with
+  touchid" (now "Secure Enclave, Touch ID available"); `backup ls` over an
+  unreadable vault reads as a sentence; a grant for `--ttl 1m` is announced
+  as 60s, not 59s; `verify` says that it takes a minute or two; the help of
+  `bunker create` gives the whole name rule; `--no-mask` says that without
+  it the command's output is a pipe. ARCHITECTURE now lists the lock files,
+  the environment variables a person sets, and how names are matched.
+- Stated, not changed: with `IRONDOME_NO_TOUCH=1`, `init` still offers the
+  Touch ID modes (creating such a vault raises no prompt); entry names
+  ignore letter case while aliases and field names do not; IronDome puts its
+  own modes (0700, 0600) back on its folders and files when it writes; the
+  owner's own `get` and `otp` leave no audit record; `nuke` and `bunker rm`
+  at a terminal ask for a typed word, not for the password.
+
+An independent reviewer then read these changes and found three faults in
+them (a grant still announced as 59s now and then, the importer and the
+search not yet using the one Unicode form), which are fixed above.
+
+Not covered by that trial: everything that needs a finger, the clipboard, a
+second Mac, a locked screen, and memory (the tools for it raise dialogs or
+need more rights than the lab had).
+
 ### Added
 
 - **Cryptography:** Argon2id (256 MiB, t=3, p=4 by default, 64 MiB on a

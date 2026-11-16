@@ -1230,3 +1230,38 @@ def test_a_killed_write_leaves_a_file_that_the_sweep_then_removes(isolated):
     assert left[0].read_bytes() == b"the new vault, never renamed into place"
     assert paths.sweep_temporary(directory, older_than=0) == 1
     assert [path.name for path in directory.iterdir()] == ["vault.irondome"]
+
+
+# -- the device directory is kept out of Time Machine (found by hand on a Mac) -------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Time Machine is macOS")
+def test_the_device_directory_is_marked_as_left_out_of_backups_when_it_is_made() -> None:
+    """A whole-home backup held the sealed device keys, so copying both folders back undid `nuke`."""
+    import plistlib
+
+    assert not paths.device_root().exists()
+    paths.ensure_dir(paths.device_dir())
+    assert paths.excluded_from_backup(paths.device_root()) is True
+    assert paths.excluded_from_backup(paths.root().parent) is False  # the mark is on that directory alone
+    # The mark is the one `tmutil addexclusion` writes, byte for byte (read back with macOS's own tool).
+    shown = subprocess.run(
+        ["/usr/bin/xattr", "-px", "com.apple.metadata:com_apple_backup_excludeItem", str(paths.device_root())],
+        capture_output=True, text=True, timeout=30, env={"PATH": "/usr/bin:/bin"},
+    )
+    assert shown.returncode == 0
+    assert plistlib.loads(bytes.fromhex("".join(shown.stdout.split()))) == "com.apple.backupd"
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Time Machine is macOS")
+def test_a_directory_made_without_ensure_dir_is_reported_as_not_marked(tmp_path: Path) -> None:
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    assert paths.excluded_from_backup(bare) is False
+    assert paths.exclude_from_backup(bare) is True and paths.excluded_from_backup(bare) is True
+    assert paths.exclude_from_backup(tmp_path / "missing") is False
+
+
+@pytest.mark.skipif(sys.platform == "darwin", reason="everywhere but macOS")
+def test_off_macos_there_is_no_backup_mark(tmp_path: Path) -> None:
+    assert paths.exclude_from_backup(tmp_path) is None and paths.excluded_from_backup(tmp_path) is None

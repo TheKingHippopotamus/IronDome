@@ -1044,7 +1044,7 @@ def test_nuke_json(cli: CLI) -> None:
     build()
     result = ok(cli("nuke", "--yes-destroy-everything", "--password-stdin", "--json", stdin=lines(PASSWORD)))
     document = json.loads(result.stdout)
-    assert set(document) == {"plan", "report", "legacy", "success", "nothing_to_do"}
+    assert set(document) == {"plan", "report", "legacy", "success", "nothing_to_do", "device_copy_caveat"}
     assert document["success"] is True and document["nothing_to_do"] is False
     assert set(document["plan"]) == {
         "root", "device_root", "bunkers", "unreadable_vaults", "device_keys", "recovery_bunkers", "capabilities",

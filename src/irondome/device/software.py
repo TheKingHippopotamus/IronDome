@@ -127,6 +127,15 @@ class SoftwareBackend(DeviceBackend):
     def exists(self, descriptor: Dict[str, Any]) -> bool:
         return self._path(descriptor).is_file()
 
+    def fault(self, descriptor: Dict[str, Any]) -> Optional[str]:
+        try:
+            info = os.stat(self._path(descriptor))  # as unseal opens it: a link is followed
+        except OSError:
+            return None  # absent, or out of reach: exists() and unseal() say which
+        if not stat.S_ISREG(info.st_mode) or info.st_size != DEVICE_SECRET_LEN:
+            return "the device key file is damaged"
+        return None
+
     def destroy_all(self) -> int:
         directory = paths.device_dir()
         if not directory.is_dir():
