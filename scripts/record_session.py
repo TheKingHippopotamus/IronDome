@@ -168,7 +168,12 @@ class Shell:
                     time.sleep(0.15)
                     os.write(self.fd, ((reply or "") + "\n").encode())
         text = seen.decode("utf-8", "replace").replace("\r\n", "\n").replace("\r", "")
-        body = text.split("\n", 1)[1] if "\n" in text else ""  # drop the echoed command line
+        # Drop the echoed command line. A command typed before the shell is reading
+        # again is echoed twice (by the terminal, then by the shell as it redraws its
+        # line), so what the command showed starts after the last echo: the marker
+        # followed by the backslash-n and the quote that only the typed line holds.
+        body = text.rsplit(marker + "\\n'", 1)[-1]
+        body = body.split("\n", 1)[1] if "\n" in body else ""
         body = body.split(marker)[0]
         return body.rstrip("\n")
 
