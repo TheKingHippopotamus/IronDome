@@ -163,6 +163,7 @@ __all__ = [
     "MODES",
     "TOKEN_PATTERN",
     "session_expires",
+    "session_mark",
     "SESSION_TTL_MIN",
     "SESSION_TTL_MAX",
     "GRANT_TTL_MIN",
@@ -1724,15 +1725,32 @@ def _note_removed(vault: Optional["Vault"], removed: List[Tuple[str, str]], summ
         raise audit.AuditError(f"{summary}, but that could not be recorded: {exc}") from None
 
 
+def session_mark(token: str) -> str:
+    """What the label of a grant made under the session *token* ends with: ``[session <first 12 of its id>]``.
+
+    :func:`end_sessions` revokes the grants that carry the mark of a session it ends, so that a grant a
+    session made does not outlive it. The label is part of what a capability file authenticates.
+    :class:`AuthError` if *token* is not a session token.
+    """
+    kind, cap_id, secret = parse_token(token)
+    wipe_bytes(secret)
+    if kind != KIND_SESSION:
+        raise AuthError("that is a grant token, not a session token")
+    return f"[session {cap_id[:12]}]"
+
+
 def end_sessions(token: Optional[str] = None, *, vault: Optional["Vault"] = None) -> int:
     """Destroy the session *token* names, or every session when there is no token.
 
     Returns how many were destroyed (0 if the token's session is already
     gone). Needs only the token's id, not a correct secret: ending a session
-    is always allowed. Pass *vault* to have each one recorded in the audit
-    log as ``session.end``.
+    is always allowed. The grants made under a session that ends here (their
+    label ends with its :func:`session_mark`) are revoked with it. Pass
+    *vault* to have each one recorded in the audit log as ``session.end``
+    and ``grant.revoke``.
     """
     ended: List[str] = []
+    revoked: List[str] = []
     if token is not None:
         kind, cap_id, secret = parse_token(token)
         wipe_bytes(secret)
@@ -1751,8 +1769,17 @@ def end_sessions(token: Optional[str] = None, *, vault: Optional["Vault"] = None
             if os.path.lexists(str(path)) and (header is None or header.kind == KIND_SESSION):
                 _destroy(path)
                 ended.append(cap_id)
+        marks = tuple(f"[session {ended_id[:12]}]" for ended_id in ended)
+        if marks:
+            for found_id, path in _capability_files():
+                header = _load_quietly(path, found_id)
+                if header is not None and header.kind == KIND_GRANT and header.label.endswith(marks):
+                    _destroy(path)
+                    revoked.append(found_id)
     _note_removed(
-        vault, [("session.end", ended_id) for ended_id in ended], _plural(len(ended), "session ended", "sessions ended")
+        vault,
+        [("session.end", ended_id) for ended_id in ended] + [("grant.revoke", grant_id) for grant_id in revoked],
+        _plural(len(ended), "session ended", "sessions ended"),
     )
     return len(ended)
 

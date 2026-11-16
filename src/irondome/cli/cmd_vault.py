@@ -24,8 +24,10 @@ Secrets never come from command-line arguments, where shell history and the proc
 them. They come from a hidden prompt on the terminal or from stdin. With ``--password-stdin`` the
 master password is the first line; then, for ``add`` and ``edit``, the value (``--value-stdin``),
 the TOTP secret (``--totp-stdin``) and one line per ``--field NAME``, in command-line order; the
-notes (``--note-stdin``) take whatever is left. Field values come from stdin whenever stdin carries
-any of that input, and from a hidden prompt otherwise.
+notes (``--note-stdin``) take whatever is left. A value that is the last of these on stdin is read to
+the end of input (:func:`_stdin_value`): a key of several lines is never cut at its first line.
+Field values come from stdin whenever stdin carries any of that input, and from a hidden prompt
+otherwise.
 """
 
 from __future__ import annotations
@@ -59,7 +61,6 @@ from irondome.errors import (
     UsageError,
     VaultError,
 )
-from irondome.generator import estimate_strength
 from irondome.keys import KIND_DEVICE, KIND_PASSWORD, KIND_RECOVERY, Keyslot
 from irondome.secmem import SecureBuffer, _wipe_str, read_secret, read_secret_from_fd, wipe_bytes
 from irondome.unlock import MODE_PASSWORD, MODE_TOUCHID, MODE_TOUCHID_PASSWORD, MODES, create_vault, unlock
@@ -85,6 +86,7 @@ Handler = Callable[[Context, argparse.Namespace], int]
 _KINDS = ("login", "secret")
 #: The most --note-stdin reads: the vault itself holds notes of up to a million characters.
 _NOTE_LIMIT_BYTES = 4 * 1024 * 1024
+_VALUE_LIMIT_BYTES = 64 * 1024  # a value read to the end of stdin: room for any key or certificate chain
 #: How Vault.commit names its automatic snapshots (``backups/vault-<generation>.irondome``).
 _SNAPSHOT_NAME = re.compile(r"vault-\d{10,}\.irondome")
 _MODE_PHRASES = {
@@ -498,19 +500,6 @@ def warn_if_cheap(ctx: Context, params: Argon2Params, what: str) -> None:
     )
 
 
-_WEAK_LABELS = ("very weak", "weak")
-
-
-def _warn_if_weak(ctx: Context, password: SecureBuffer) -> None:
-    """A remark, never a refusal, when a new master password is one a guessing program finds early."""
-    strength = estimate_strength(password)
-    if strength.label in _WEAK_LABELS:
-        reason = f" ({strength.warnings[0]})" if strength.warnings else ""
-        ctx.out.warn(
-            f"that master password is {strength.label}{reason}. The device key keeps a copied vault file from "
-            "being guessed at, but whoever has this machine or its files can still try passwords: a longer "
-            "passphrase costs nothing here (irondome gen --words 6 makes one; irondome passwd changes it)"
-        )
 
 
 def _params_of(slots: Sequence[Keyslot]) -> Argon2Params:
@@ -580,6 +569,9 @@ def _replace_slots(
             with _CarriedThrough(ctx):
                 vault.commit(snapshots=0)
                 _finish_retirement(ctx)
+            # A keyslot change killed before its rename left a whole vault with the old keyslots in a temporary
+            # file. The lock is held, so nothing is writing one now.
+            paths.sweep_temporary(paths.home(), older_than=0)
         except BaseException:
             if recorded:
                 _finish_retirement(ctx)
@@ -838,8 +830,6 @@ def _create(ctx: Context, args: argparse.Namespace) -> int:
         )
     password = None if args.no_password else ctx.new_master_password()
     try:
-        if password is not None:
-            _warn_if_weak(ctx, password)
         vault, recovery = create_vault(
             mode=mode, password=password, with_recovery=not args.no_recovery, params=params, backend_name=backend.name
         )
@@ -1109,8 +1099,36 @@ def _read_value(
         bits = generator.passphrase_entropy_bits(args.words)
         return generator.generate_passphrase(args.words), f"a {args.words}-word passphrase ({bits:.0f} bits)"
     if source == "--value-stdin":
-        return _stdin_text("the value"), None
+        return _stdin_value(args), None
     return _prompt_text(ctx, f"Value for {_safe(name)}: ", "the value", "--value-stdin"), None
+
+
+def _stdin_value(args: argparse.Namespace) -> str:
+    """The value from stdin: all that is left there, or one line when something else follows it.
+
+    A private key or a certificate is several lines, and a command that kept the first and said ``ok``
+    would lose the rest without a word. So when the value is the last thing stdin holds for this command
+    (no ``--totp-stdin``, no ``--field``, no ``--note-stdin``) it is everything up to the end of input: a
+    single line without its line break, several lines exactly as they came. When something follows, each
+    item is one line; a value of several lines then needs its own command. At a terminal a value is one
+    line, ended with Enter.
+    """
+    what = "the value"
+    more_follows = args.totp_stdin or args.field or args.note_stdin
+    if more_follows or os.isatty(0):
+        return _stdin_text(what)
+    data = _stdin_bytes(what, _VALUE_LIMIT_BYTES)
+    try:
+        if not data:
+            raise UsageError(f"expected {what} on stdin, and found nothing")
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            raise UsageError(f"{what} is not valid UTF-8 text") from None
+    finally:
+        wipe_bytes(data)
+    body = text[:-2] if text.endswith("\r\n") else text[:-1] if text.endswith("\n") else text
+    return text if "\n" in body else body
 
 
 def _read_totp(ctx: Context, source: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1171,8 +1189,8 @@ def _read_fields(ctx: Context, args: argparse.Namespace, names: Sequence[str]) -
     return values
 
 
-def _stdin_rest(what: str) -> str:
-    """Everything left on stdin, without its final line break: multi-line notes."""
+def _stdin_bytes(what: str, limit: int) -> bytearray:
+    """Everything left on stdin, up to *limit* bytes. The caller wipes what it gets."""
     raw = io.FileIO(0, "rb", closefd=False)
     data = bytearray()
     try:
@@ -1185,10 +1203,19 @@ def _stdin_rest(what: str) -> str:
                 time.sleep(0.02)
                 continue
             if not chunk:
-                break
+                return data
             data += chunk
-            if len(data) > _NOTE_LIMIT_BYTES:
-                raise UsageError(f"{what} is too long: at most {_NOTE_LIMIT_BYTES // 1024} KiB")
+            if len(data) > limit:
+                raise UsageError(f"{what} is too long: at most {limit // 1024} KiB")
+    except BaseException:
+        wipe_bytes(data)
+        raise
+
+
+def _stdin_rest(what: str) -> str:
+    """Everything left on stdin, without its final line break: multi-line notes."""
+    data = _stdin_bytes(what, _NOTE_LIMIT_BYTES)
+    try:
         try:
             text = data.decode("utf-8")
         except UnicodeDecodeError:
@@ -2671,7 +2698,11 @@ def _add_value_options(parser: argparse.ArgumentParser, *, editing: bool) -> Non
         "--no-ambiguous", action="store_true", help="with --generate: leave out look-alikes such as 0, O, 1, l"
     )
     group.add_argument("--words", type=int, metavar="N", help="generate a passphrase of N words instead")
-    group.add_argument("--value-stdin", action="store_true", help="read the value from the next line of stdin")
+    group.add_argument(
+        "--value-stdin", action="store_true",
+        help="read the value from stdin: all of it, several lines included, unless --totp-stdin, --field or "
+        "--note-stdin follow (then it is one line)",
+    )
     if editing:
         group.add_argument("--prompt-value", action="store_true", help="type the new value at a hidden prompt")
     group.add_argument("--show", action="store_true", help="print the generated value on stdout")
@@ -2696,7 +2727,9 @@ def register(subparsers: Any, common: argparse.ArgumentParser) -> None:
         "Create the vault of the current bunker and bind it to this machine's security chip, or to a device key "
         "file where there is none. Choose a master password, Touch ID or both; a recovery key is shown once. "
         "With --password-stdin the new master password is the first line of stdin, unless another bunker already "
-        "has a vault: only its owner may add one, so the default bunker's master password comes first.",
+        "has a vault: only its owner may add one, so the default bunker's master password comes first; when stdout "
+        "is not a terminal, the recovery key is the one thing written to it (the rest goes to stderr), so whatever "
+        "captures a script's output keeps that key.",
         [
             ("irondome init", "create the vault of bunker alpha"),
             ("irondome init --mode touchid", "Touch ID, with the password as fallback"),
@@ -2722,7 +2755,8 @@ def register(subparsers: Any, common: argparse.ArgumentParser) -> None:
         "Store a new login or secret. The value comes from one source (--generate, --words N, --value-stdin or a "
         "hidden prompt); a custom field's (--field NAME) from a hidden prompt or stdin, never the command line. "
         "stdin holds, in order: the master password (--password-stdin), the value (--value-stdin), the TOTP secret "
-        "(--totp-stdin), one line per --field, then the notes (--note-stdin), which take the rest.",
+        "(--totp-stdin), one line per --field, then the notes (--note-stdin), which take the rest; a value that is the "
+        "last thing on stdin is read to the end of input, so a key of several lines is stored whole.",
         [
             ("irondome add github --generate", "a login with a generated password"),
             ("irondome add aws/prod --kind secret", "an API key, typed at a prompt"),
@@ -2797,7 +2831,8 @@ def register(subparsers: Any, common: argparse.ArgumentParser) -> None:
         "Change an entry's details, value, TOTP secret or custom fields; options left out keep what is there. A "
         "replaced password is kept in the entry's history. stdin holds, in order: the master password "
         "(--password-stdin), the value (--value-stdin), the TOTP secret (--totp-stdin), one line per --field, then "
-        "the notes (--note-stdin), which take the rest.",
+        "the notes (--note-stdin), which take the rest; a value that is the last thing on stdin is read to the end "
+        "of input, several lines included.",
         [
             ("irondome edit github --generate", "a new password; the old one is kept"),
             ("irondome edit github --agent use", "agents may use it, not see it"),
@@ -2881,7 +2916,9 @@ def register(subparsers: Any, common: argparse.ArgumentParser) -> None:
         "bound to this machine's device key. For a lost or replaced machine, a cleared security chip, a lost "
         "device key file or a forgotten master password: put the vault file back in place first (irondome "
         "status shows where it belongs). Every keyslot that needed the old device key or the old password, "
-        "Touch ID keyslots included, is replaced by the new one; the snapshots are deleted and sessions end. "
+        "Touch ID keyslots included, is replaced by the new one; the snapshots are deleted and sessions end. Grants "
+        "are not revoked: one whose device key is still on this machine works until it expires (irondome grant "
+        "revoke --all ends them; irondome rekey also stops any copy of them). "
         "The recovery key itself is not changed. stdin lines with --password-stdin: the recovery key, then the "
         "new master password.",
         [("irondome recovery use", "the recovery key, then the new master password twice")],

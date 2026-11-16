@@ -120,6 +120,48 @@ found, and what was done:
   lockout with wrong passwords; `.env.irondome` in the working directory is
   read without asking (the variables it supplies are now listed).
 
+### Found by a second person, using the build with those fixes
+
+A second reviewer got the fixed package, the changed texts, the first report
+and the same kind of machine, and again no source code. The recovery key
+now got them back in on a lost device key file, a cleared TPM and a TPM in
+lockout. What that pass found, and what was done:
+
+- **`irondome verify` printed FAIL for `bunkers-isolated` on a TPM**, every
+  run, while the claim held: the check took the TPM's earlier refusal of
+  another bunker's grant for a failure. The check accepts that refusal, and
+  the suite now runs every self-check on the software TPM.
+- **`--value-stdin` kept the first line of a key of several lines and said
+  `ok`.** A value that is the last thing on stdin is now read to the end of
+  input, up to 64 KiB, and stored exactly as it came.
+- **Masking still passed ordinary encodings**: bash's `printf %q`, JSON as
+  Go and PHP write it, CSV quoting, a value percent-encoded twice, hex with
+  a separator between the bytes. These are masked now; the claim lists what
+  is masked form by form, and what is not.
+- **A re-key killed at its last step left a whole vault in a temporary
+  file**, which opened with the recovery key that run had printed. The next
+  write to the vault now removes such files.
+- **While a re-key was unfinished, `audit --verify` said ALTERED.** It now
+  says the log cannot be checked until the re-key is finished, and how.
+- **`.env.irondome` could set `PATH`, and `-q` hid the notice about the
+  file.** The notice is printed with `-q` too, and variables that choose
+  what code runs are taken only from a file named with `--env-file`.
+- **A grant made under a session outlived `irondome lock`.** Ending a
+  session now revokes the grants made under it.
+- **A session used without a terminal was logged as `agent`.** It is logged
+  as `session`, as the texts said.
+- **A memory cost the machine could not give ended in a traceback.** It is
+  an error in one line.
+- `passwd`, `recovery use` and `rekey` remark on a weak new master password
+  as `init` does; every unlock says when other users can reach the bunker's
+  files; `clipboard_clear_seconds` takes `45s`; a file-size limit is named
+  as one.
+- Stated, not changed: session and grant files and the audit log show
+  their bookkeeping in clear (kind, times, uses left, label); the MCP
+  server keeps the values it used in memory while it runs; `recovery use`
+  does not revoke grants; a scripted `init` writes the recovery key to
+  stdout.
+
 ### Added
 
 - **Cryptography:** Argon2id (256 MiB, t=3, p=4 by default, 64 MiB on a

@@ -213,15 +213,18 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   on purpose gets it through, as does an encoding that is not on the list;
   a `--reveal` grant or an entry marked `--agent reveal` lets an agent see
   the value. `irondome run` reads `.env.irondome` in the directory it runs
-  in without being asked: in a directory someone else wrote, read that file
-  first.
+  in without being asked and lists what the file supplies, with `-q` too;
+  variables that choose what code runs (`PATH`, `LD_PRELOAD` and their
+  like) it takes only from a file you name with `--env-file`. In a
+  directory someone else wrote, read that file first.
 * **Grant and session tokens are bearer secrets.** Whoever holds one, and can
   read its file, has what it grants; a session token in an agent's
   environment is full access while the session lasts: it unwraps the vault
   key. Under a session IronDome's commands will not make a grant that
   outlives it or set what agents may do with an entry without the master
   password again; a program that uses the token with its own code is not
-  bound by that.
+  bound by that. Ending a session with `irondome lock` revokes the grants
+  made under it.
 * **Anything running as you can lock you out for a while.** On a TPM, a few
   wrong master passwords put the chip into lockout, whoever typed them; the
   vault then refuses the right password too until the TPM forgives them.
@@ -247,7 +250,9 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   entries there are and the padded size of each, when the vault was created
   and how many times it has been written, and how it opens (keyslot kinds,
   backend, Argon2id cost). Names, usernames, URLs, tags and values are not
-  visible.
+  visible. Session and grant files show, in clear, what kind they are,
+  when they were made and expire, the uses left and the label you gave
+  them; the audit log shows a time and a sequence number per line.
 * **No hardware backend on Windows yet**, and Windows is not covered by the
   test suite.
 

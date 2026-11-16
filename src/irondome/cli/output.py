@@ -161,6 +161,10 @@ class Output:
         if not self.quiet:
             self._say(text)
 
+    def notice(self, text: str) -> None:
+        """A line the user must not miss and that is not a warning: printed with ``-q`` as well."""
+        self._say(text)
+
     def ok(self, text: str) -> None:
         if not self.quiet:
             self._say(f"{self.style('ok', 'green', err=True)}  {text}")

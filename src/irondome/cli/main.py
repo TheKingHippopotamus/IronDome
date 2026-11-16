@@ -381,11 +381,13 @@ def _os_error(exc: OSError) -> str:
         for name in (exc.filename, exc.filename2)
         if name is not None
     ]
-    text = f"{' -> '.join(places) or 'a file IronDome needs'}: {reason}"
+    text = f"{' -> '.join(places) or 'IronDome could not write or read one of its files'}: {reason}"
     if exc.errno in (errno.EACCES, errno.EPERM, errno.EROFS):
         text += " (check that the directory is yours and writable)"
     elif exc.errno in (errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)):
         text += " (free some space and run the command again)"
+    elif exc.errno == errno.EFBIG:
+        text += " (a limit on file size stopped the write: see ulimit -f, then run the command again)"
     return _printable(text)
 
 

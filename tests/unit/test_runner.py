@@ -230,7 +230,7 @@ def test_patterns_are_what_standard_encoders_produce(value: str) -> None:
         for encoded in encodings:
             assert encoded in patterns, (label, encoded)
     assert {label for label, _ in forms} <= {
-        "plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr", "line"
+        "plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr", "line", "doubled"
     }
     lines = [line.strip() for line in raw.splitlines()]
     for line in lines if len(lines) > 1 else []:
@@ -320,10 +320,10 @@ def test_a_pattern_is_labelled_by_the_first_encoding_that_produces_it() -> None:
     assert forms[b"YWJjZGVmZ2hp"] == "base64"  # also its URL-safe form, and it needs no padding
     assert forms[b"616263646566676869"] == "hex"  # no letters: upper and lower case are the same
     assert sorted(set(forms.values())) == ["base64", "hex", "plain"]
-    order = ["plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr", "line"]
+    order = ["plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr", "doubled", "line"]
     labels = [label for label, _ in secret_patterns("a+b/c d\"e?fé")]
     assert labels == sorted(labels, key=order.index)
-    assert set(labels) == {"plain", "base64", "base64url", "hex", "percent", "html", "json"}
+    assert set(labels) == {"plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "doubled"}
     labels = [label for label, _ in secret_patterns("a+b/c d\"e?fé $1 it's \\")]
     assert labels == sorted(labels, key=order.index)
     assert set(labels) == set(order) - {"line"}
@@ -1979,3 +1979,59 @@ def test_public_names() -> None:
         127, 126, 124,
     )
     assert CommandCancelledError.exit_code == 130
+
+
+# -- encodings a second person got past the mask with, by hand, on the final build ----------------------
+
+
+def test_patterns_cover_the_other_json_csv_percent_and_hex_writers() -> None:
+    value = 'p@ss/w0rd+x&y=1<z>"q" ~end'
+    raw = value.encode()
+    patterns = {pattern for _, pattern in runner.secret_patterns(value)}
+    # Go's encoding/json writes &, < and > as \u escapes (its documentation: "so that the JSON will be safe to
+    # embed inside HTML"); PHP's json_encode writes "/" as "\/" unless JSON_UNESCAPED_SLASHES is given.
+    assert b'p@ss/w0rd+x\\u0026y=1\\u003cz\\u003e\\"q\\" ~end' in patterns
+    assert b'p@ss\\/w0rd+x&y=1<z>\\"q\\" ~end' in patterns
+    assert value.replace('"', '""').encode() in patterns  # a CSV field
+    once = urllib.parse.quote(value, safe="")
+    assert urllib.parse.quote(once, safe="").encode() in patterns  # a URL inside a URL
+    assert lower_escapes(once).replace(b"%", b"%25") in patterns
+    for separator in (":", " "):
+        assert raw.hex(separator).encode() in patterns and raw.hex(separator).upper().encode() in patterns
+    masker = runner.Masker({"S": value})
+    shown = masker.feed(b'{"k":"p@ss/w0rd+x\\u0026y=1\\u003cz\\u003e\\"q\\" ~end"}\n') + masker.flush()
+    assert shown == b'{"k":"[irondome:S]"}\n'
+
+
+def test_a_quote_written_twice_is_a_pattern() -> None:
+    patterns = {pattern for _, pattern in runner.secret_patterns("it's \"the\" secret")}
+    assert b"it''s \"the\" secret" in patterns and b"it's \"\"the\"\" secret" in patterns
+
+
+@pytest.mark.skipif(not os.path.exists("/bin/bash"), reason="needs bash")
+@pytest.mark.parametrize(
+    "value",
+    [
+        "47rCE6q-Tx012DR*FijL",
+        "#lead ~tilde:~x=~y$z",
+        "a b'c\"d\\e!f&g(h)i;j<k>l?m[n]o^p`q{r|s}t,u",
+        "~start#mid%done@x+y-z.w/v:u=t",
+        "plainlettersanddigits0123",
+    ],
+)
+def test_what_bash_printf_q_writes_is_a_pattern(value: str) -> None:
+    """Asked of the bash on this machine: 3.2 on a Mac, 5.x on Linux; they differ about ``~``."""
+    ran = subprocess.run(
+        ["/bin/bash", "-c", 'printf "%q\\n%q\\n" "$1" "X=$1"', "bash", value], capture_output=True, timeout=30
+    )
+    whole, inside = ran.stdout.splitlines()
+    patterns = {pattern for label, pattern in runner.secret_patterns(value) if label in ("shell", "plain")}
+    assert whole in patterns, whole
+    assert inside[:2] == b"X=" and inside[2:] in patterns, inside
+    masker = runner.Masker({"S": value})
+    assert masker.feed(ran.stdout) + masker.flush() == b"[irondome:S]\nX=[irondome:S]\n"
+
+
+def test_a_value_with_a_control_character_gets_no_bash_form() -> None:
+    """bash writes such a value as ``$'...'``, another style: said in the claim, not pretended here."""
+    assert runner._bash_quoted("tab\there") == []

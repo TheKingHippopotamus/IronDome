@@ -1144,6 +1144,10 @@ class Vault:
             if keep > 0:
                 self._snapshot(current, on_disk.generation, keep)
             paths.write_atomic(self.path, payload)
+            # What a write killed before its rename left behind is a whole older vault, or a snapshot of one.
+            # Every write into these two directories is made with this lock held, so none is in progress.
+            paths.sweep_temporary(self.path.parent, older_than=0)
+            paths.sweep_temporary(self._snapshot_dir(), older_than=0)
             self.file.index = index
             self.file.generation = generation
             self._loaded_generation = generation
@@ -1185,11 +1189,12 @@ class Vault:
         return [path for _, path in self._snapshot_files()]
 
     def purge_snapshots(self) -> int:
-        """Delete every automatic snapshot (they still open with *old* keyslots)."""
+        """Delete every automatic snapshot (they still open with *old* keyslots). Call with the bunker's lock held."""
         count = 0
         for snapshot in self.snapshots():
             paths.secure_delete(snapshot)
             count += 1
+        paths.sweep_temporary(self._snapshot_dir(), older_than=0)  # a snapshot that never got its name
         return count
 
     # -- cloning (backup, restore, re-key) ------------------------------------

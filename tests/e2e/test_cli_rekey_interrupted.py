@@ -212,6 +212,47 @@ def test_the_audit_history_survives_a_rekey_killed_after_the_switch(cli: CLI) ->
     ]
 
 
+def test_while_a_rekey_is_unfinished_the_audit_log_is_not_called_altered(cli: CLI) -> None:
+    """A person killed a re-key after its switch and ran ``audit --verify``: it blamed tampering for all 7 lines.
+
+    Nothing had touched the log. It was written under the vault key the re-key replaced and had not been set
+    aside yet. Now the answer is that it cannot be checked until the re-key is finished, and how to finish.
+    """
+    ok(cli("init", "--password-stdin", "--no-recovery", stdin=PASSWORD + "\n"))
+    ok(cli("add", "first", "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\nvalue-1\n"))
+    killed = run_with_fault("kill-after-switch", "rekey", "--yes", "--password-stdin", "--json")
+    assert killed.returncode == -signal.SIGKILL, killed.stderr
+    midway = cli("audit", "--verify", "--password-stdin", stdin=PASSWORD + "\n")
+    assert midway.returncode == 1
+    assert "NOT VERIFIED: this log was written before a re-key that has not finished" in midway.stdout
+    assert "ALTERED" not in midway.stdout and "was edited, cut or added to" not in midway.stderr
+    assert "Run irondome rekey" in midway.stderr and "irondome audit --archive NAME --verify" in midway.stderr
+    as_json = json.loads(cli("audit", "--verify", "--json", "--password-stdin", stdin=PASSWORD + "\n").stdout)
+    assert as_json["verify"]["ok"] is False and as_json["verify"]["unfinished_rekey"] is True
+    assert rekey(cli)["leftovers"] == []
+    from irondome import audit
+
+    (archive,) = [path.name for path in audit.archives()]
+    checked = ok(cli("audit", "--verify", "--archive", archive, "--password-stdin", stdin=PASSWORD + "\n"))
+    assert "verified: all" in checked.stdout
+
+
+def test_a_rekey_removes_the_whole_vault_a_killed_write_left_in_a_temporary_file(cli: CLI) -> None:
+    """A re-key killed at its last rename left ``.tmp-...``: a vault that opened with a replaced recovery key.
+
+    The next re-key finished the job and left that file. Now it is removed there, however soon it runs:
+    a first fix waited two seconds before calling such a file abandoned, and a replay in the lab ran the
+    next re-key inside those two seconds.
+    """
+    ok(cli("init", "--password-stdin", "--no-recovery", stdin=PASSWORD + "\n"))
+    bunker = paths.home()
+    left = bunker / ".tmp-k1ll3dwr"
+    left.write_bytes(paths.vault_file().read_bytes())  # written this instant
+    assert rekey(cli)["leftovers"] == []
+    assert not left.exists()
+    assert [path.name for path in bunker.iterdir() if path.name.startswith(".tmp-")] == []
+
+
 @pytest.mark.parametrize("json_mode", [False, True], ids=["text", "json"])
 def test_a_rekey_interrupted_after_the_switch_still_shows_the_new_recovery_key(
     cli: CLI, isolated: Path, json_mode: bool

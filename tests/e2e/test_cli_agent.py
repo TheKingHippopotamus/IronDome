@@ -1372,8 +1372,8 @@ def test_the_audit_log_shows_grant_uses_session_uses_and_changes_with_the_right_
     assert (identifier, "grant", "grant.use", identifier) in seen
     assert (identifier, "grant", "use", "GITHUB_TOKEN") in seen
     assert ("vault", "owner", "session.start", grant_id(session)) in seen
-    # A session token in a process with no terminal is exactly what an agent would hold.
-    assert ("vault", "agent", "use", "prod-db/dsn") in seen
+    # A session token is what opened the vault, terminal or not: the log names what proved the caller.
+    assert ("vault", "session", "use", "prod-db/dsn") in seen
     line = shlex.join(command)
     shown = line if len(line) <= 200 else line[:199] + "\u2026"  # the command line, cut to 200 characters
     assert [event["detail"] for event in events if event["action"] == "use"] == [shown, shown]

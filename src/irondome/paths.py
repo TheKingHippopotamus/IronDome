@@ -43,6 +43,7 @@ import stat
 import sys
 import tempfile
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Tuple, Union
@@ -387,6 +388,41 @@ def write_atomic(path: Union[str, Path], data: Union[bytes, bytearray, memoryvie
             pass
         raise
     _fsync_dir(path.parent)
+
+
+_TEMPORARY_NAME = re.compile(r"\.tmp-[a-z0-9_]{8}")
+
+
+def sweep_temporary(directory: Union[str, Path], *, older_than: float = 60.0) -> int:
+    """Delete what :func:`write_atomic` left in *directory* when it was killed before its rename.
+
+    Such a file is a whole copy of what was being written: of a vault, it opens with the keyslots that
+    vault had, which a later re-key or password change was meant to retire. Only regular files named as
+    ``write_atomic`` names them (``.tmp-`` and eight characters) and last changed more than *older_than*
+    seconds ago are taken: a write in progress keeps its file for milliseconds, so an old one belongs to
+    nobody. A caller that holds the lock every writer into *directory* takes (the bunker's lock, for the
+    bunker's directory and its snapshots) passes ``older_than=0``: no write can be in progress then.
+    Returns how many were deleted; a file that cannot be deleted is left, and not counted.
+    """
+    try:
+        names = os.listdir(str(directory))
+    except OSError:
+        return 0
+    deadline = time.time() - older_than
+    removed = 0
+    for name in names:
+        if not _TEMPORARY_NAME.fullmatch(name):
+            continue
+        path = Path(directory) / name
+        try:
+            status = os.lstat(str(path))
+            if not stat.S_ISREG(status.st_mode) or status.st_mtime > deadline:
+                continue
+            secure_delete(path)
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def read_file(path: Union[str, Path], *, limit: Optional[int] = None) -> bytes:

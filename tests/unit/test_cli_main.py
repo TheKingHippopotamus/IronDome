@@ -47,8 +47,12 @@ def failing_status(error: OSError):
          "/ro/.irondome: Read-only file system (check that the directory is yours and writable)"),
         (OSError(errno.EXDEV, "Invalid cross-device link", "/a/.tmp-1", None, "/b/vault.irondome"),  # as os.replace
          "/a/.tmp-1 -> /b/vault.irondome: Invalid cross-device link"),
-        (OSError(errno.EIO, "Input/output error"), "a file IronDome needs: Input/output error"),
-        (OSError("something odd"), "a file IronDome needs: OSError"),
+        (OSError(errno.EIO, "Input/output error"),
+         "IronDome could not write or read one of its files: Input/output error"),
+        (OSError(errno.EFBIG, "File too large", "/data/vault.irondome"),
+         "/data/vault.irondome: File too large (a limit on file size stopped the write: see ulimit -f, then run the "
+         "command again)"),
+        (OSError("something odd"), "IronDome could not write or read one of its files: OSError"),
         (OSError(errno.ENOENT, "No such file", "/x/line\nbreak\x1b[2J"), "/x/line\\nbreak\\x1b[2J: No such file"),
     ],
 )

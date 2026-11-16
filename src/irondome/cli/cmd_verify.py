@@ -79,7 +79,9 @@ def verify(ctx: Context, args: argparse.Namespace) -> int:
         ctx.out.table(("claim", "result", "detail"), rows)
     for note in report.notes:
         ctx.out.warn(note)
-    kind = "hardware" if report.hardware else "file-based, not hardware"
+    kind = "hardware" if report.hardware else (
+        "file-based, not hardware" if report.backend == "software" else "software, not hardware"
+    )
     summary = (
         f"{len(report.outcomes)} claims on {report.backend} ({kind}): {report.count(selftest.PASS)} pass, "
         f"{failed} FAIL, {report.count(selftest.SKIPPED)} skipped"

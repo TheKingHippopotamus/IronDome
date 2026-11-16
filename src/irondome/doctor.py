@@ -548,7 +548,17 @@ def collect() -> Dict[str, Any]:
     report["backends"] = backends
     report["new_vault_backend"] = _new_vault_backend(backends, findings, helper)
     hardware = [item["name"] for item in backends if item["available"] and item["hardware"]]
-    if not hardware and all(item["probed"] for item in backends):
+    simulated = [item["name"] for item in backends if item["available"] and not item["hardware"]
+                 and item["name"] != "software"]
+    if not hardware and simulated and all(item["probed"] for item in backends):
+        findings.add(
+            "warning", "device-backend",
+            "no security chip is usable here: the TPM this machine answers with is a software one, which protects "
+            "a copied vault but not a stolen computer",
+            "nothing to fix inside a virtual machine or a container; on real hardware, enable the TPM in the "
+            "firmware settings",
+        )
+    elif not hardware and all(item["probed"] for item in backends):
         findings.add(
             "warning", "device-backend",
             "no security chip is usable here: device keys are files, which protect a copied vault but not a "

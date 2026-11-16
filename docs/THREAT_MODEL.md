@@ -140,7 +140,10 @@ exception, by design: it is full access while it lasts, so never let an agent
 inherit one. Under a session alone IronDome's commands refuse to make a grant
 that would outlive it, and to set what agents may do with an entry: both ask
 for the master password again, and what a session does is recorded in the
-audit log as `session`. That stops accidents and tools that only run
+audit log as `session`, with or without a terminal (`agent` there is a
+command that had no terminal and was given no master password: the MCP
+server, a Touch ID approval). Ending a session with `irondome lock` revokes
+the grants made under it. That stops accidents and tools that only run
 `irondome`. It is not a boundary: the token unwraps the vault key, so a
 program that holds it and uses its own code can do whatever the owner can,
 a grant that outlives the session included.
@@ -160,7 +163,11 @@ resets the counter at once, for you and for anyone else who can use the TPM:
 `irondome doctor` says which it is.
 
 **`.env.irondome` is read without asking.** `irondome run` takes it from the
-directory the command runs in and says which variables it found there. The
+directory the command runs in and says which variables it found there, with
+`-q` as well. From a file nobody named it refuses the variables that choose
+what code runs (`PATH`, `LD_PRELOAD`, `BASH_ENV`, `PYTHONPATH` and their
+like) until you name the file with `--env-file`; that list cannot be
+complete. The
 file names what the command receives, so in a directory someone else wrote (a
 cloned repository), read it before you run anything through `irondome run`
 with your master password or a session; a grant gives the command only what
@@ -273,7 +280,26 @@ with the old key and shows what it held then.
 * **The default Argon2id cost is lower on a small machine:** 64 MiB instead of
   256 MiB where there is less than 3 GiB of RAM, and `IRONDOME_KDF_MEMORY_MIB`
   or `--kdf-memory-mib` replaces it with any value from 19 MiB to 4 GiB. A
-  keyslot keeps the cost it was made with.
+  keyslot keeps the cost it was made with; a cost the machine has no memory
+  for is refused with an error, when a vault is made or opened.
+* **Session and grant files, and the audit log, show their bookkeeping in
+  clear.** A file in `caps/` shows whether it is a session or a grant, when
+  it was made, when it expires, the uses left, its label and the device key
+  it is bound to; `irondome grant ls` prints these without the master
+  password. Each line of `audit.log` shows a sequence number, a time and
+  which key wrote it. What a grant covers, and what a log line says, are
+  encrypted. Put nothing in a label that you would not show.
+* **The MCP server keeps what it has used in memory.** It runs for as long
+  as the agent's session, and decrypted values are ordinary Python strings:
+  they stay in its memory until it exits, readable by a debugger with
+  rights over that process.
+* **A write that is killed leaves its temporary file.** IronDome writes a
+  file beside the one it replaces and renames it; killed in between, it
+  leaves `.tmp-` and eight characters in the bunker's directory: a whole
+  copy of the vault as it was being written. The next write to the vault
+  removes such files: a re-key, a keyslot change, or any entry added or
+  changed. Until then one left by a killed re-key opens with the recovery
+  key that re-key had printed.
 * **The TPM index that binds sessions and grants has an empty authorisation**
   and is exempt from dictionary-attack lockout, so that a lockout cannot stop
   every grant. Any account allowed to use the TPM can read it; it is useless

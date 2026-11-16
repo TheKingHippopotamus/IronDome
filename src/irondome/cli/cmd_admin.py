@@ -872,8 +872,8 @@ def _cleaned_warning(name: str, parts: Sequence[str]) -> str:
     named = [spoken.get(part, part) for part in parts]
     listed = named[0] if len(named) == 1 else ", ".join(named[:-1]) + " and " + named[-1]
     return (
-        f"{_printable(name)}: control characters were taken out of its {listed}, which cannot hold them; "
-        "nothing else was changed"
+        f"{_printable(name)}: control characters were taken out of its {listed}, which cannot hold them "
+        "(in an entry's name they become spaces); its value, notes and fields are as they were"
     )
 
 
@@ -1647,6 +1647,10 @@ def _sweep_staging(live: Vault, leftovers: List[str]) -> int:
             paths.secure_delete(path)
         except OSError as exc:
             leftovers.append(f"{path} (left by an interrupted re-key) could not be deleted: {exc.strerror or exc}")
+    # A write killed before its rename left a whole copy of the vault as it was being written: one that may open
+    # with a recovery key this bunker has since replaced. The lock is held, and every write into this directory
+    # is made with it held, so no such file belongs to a write in progress.
+    paths.sweep_temporary(paths.home(), older_than=0)
     return destroyed
 
 

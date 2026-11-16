@@ -104,11 +104,12 @@ def set_value(key: str, raw: str) -> int:
     setting = SETTINGS[key]
     text = str(raw).strip()
     # A lifetime is stored in seconds and may be given the way --ttl takes it: 90s, 15m, 2h, 1d.
-    lifetime = _DURATION.fullmatch(text.lower()) if key.endswith("_ttl") else None
+    timed = key.endswith(("_ttl", "_seconds"))
+    lifetime = _DURATION.fullmatch(text.lower()) if timed else None
     try:
         value = int(lifetime.group(1)) * _UNIT_SECONDS[lifetime.group(2)] if lifetime else int(text)
     except ValueError:
-        how = " of seconds, or a duration such as 15m or 2h" if key.endswith("_ttl") else ""
+        how = " of seconds, or a duration such as 15m or 2h" if timed else ""
         raise UsageError(f"{key} must be a whole number{how}") from None
     if not setting.minimum <= value <= setting.maximum:
         raise UsageError(f"{key} must be between {setting.minimum} and {setting.maximum}")

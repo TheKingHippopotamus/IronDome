@@ -60,6 +60,13 @@ _APPROVAL_LABEL = "approved with Touch ID"
 _AGENT_ALLOWED = ("use", "reveal")
 _AUDIT_COUNT = 50
 _ENV_FILE_NAME = ".env.irondome"
+#: Variables that decide what code a command runs: where programs and libraries are looked up, and what a shell
+#: or an interpreter loads before the program it was asked for. A file nobody named may not set them.
+_CODE_CHOOSING = re.compile(
+    r"PATH|CDPATH|IFS|ENV|HOME|ZDOTDIR|XDG_CONFIG_HOME|BASH_ENV|BASH_FUNC_.*|BASHOPTS|SHELLOPTS|PS4|PROMPT_COMMAND"
+    r"|LD_.*|DYLD_.*|PYTHON.*|NODE_OPTIONS|NODE_PATH|PERL5.*|PERLLIB|RUBYOPT|RUBYLIB|JAVA_TOOL_OPTIONS|_JAVA_OPTIONS"
+    r"|GIT_SSH|GIT_SSH_COMMAND|GIT_EXEC_PATH|GIT_ASKPASS|GIT_PROXY_COMMAND|GIT_EXTERNAL_DIFF|GIT_PAGER|GIT_CONFIG.*"
+)
 _ENV_FILE_LIMIT = 1024 * 1024
 _ID = re.compile(r"[0-9a-f]{32}")
 _ID_PREFIX = re.compile(r"[0-9a-fA-F]{6,32}")
@@ -367,12 +374,21 @@ def _env_file(ctx: Context, named: Optional[str], cwd: Optional[str]) -> Optiona
     # someone else put in the directory cannot quietly decide what the command receives.
     secret = sorted(name for name, value in values.items() if refs.is_reference(value))
     plain = sorted(name for name in values if name not in secret)
+    choosing = sorted(name for name in values if _CODE_CHOOSING.fullmatch(name))
+    if choosing:
+        shown = scan.display_path(path)
+        raise UsageError(
+            f"{shown} was found in the working directory and sets {_listed(choosing)}, which "
+            f"{'decides' if len(choosing) == 1 else 'decide'} what code the command runs. IronDome takes such "
+            f"variables only from a file you name. Read the file; if it is yours, run with: --env-file {shown}"
+        )
     parts = []
     if secret:
         parts.append(f"from the vault: {_listed(secret)}")
     if plain:
         parts.append(f"set as written: {_listed(plain)}")
-    ctx.out.info(f"using {scan.display_path(path)}, found in the working directory ({'; '.join(parts) or 'empty'})")
+    # Said even with -q: this is the one notice of what a file nobody named puts into the command.
+    ctx.out.notice(f"using {scan.display_path(path)}, found in the working directory ({'; '.join(parts) or 'empty'})")
     return values
 
 
@@ -583,8 +599,12 @@ def _grant_create(ctx: Context, args: argparse.Namespace) -> int:
     mode = caps.MODE_REVEAL if args.reveal else caps.MODE_USE
     with _open_to_outlast(ctx, f"create a grant for {_spoken_list(references)}", ttl) as vault:
         covers = [_source(vault, reference)[2] for reference in references]
+        label = args.label or ""
+        if ctx.unlocked_by == "session":
+            # Marked as this session's: ending the session (irondome lock) revokes it too.
+            label = f"{label} {caps.session_mark(os.environ.get(ENV_SESSION, '').strip())}".strip()
         token, info = caps.create_grant(
-            vault, references, mode=mode, ttl=ttl, uses=uses, label=args.label or "",
+            vault, references, mode=mode, ttl=ttl, uses=uses, label=label,
             actor="session" if ctx.unlocked_by == "session" else "owner",
         )
     _report_grant(ctx, token, info, covers, "created")
@@ -822,7 +842,10 @@ def _lock(ctx: Context, args: argparse.Namespace) -> int:
     else:
         ctx.out.data(f"unset {ENV_SESSION}")
     if ended:
-        ctx.out.ok(f"ended {_plural(ended, 'session', 'sessions')} in bunker {_bunker()}")
+        ctx.out.ok(
+            f"ended {_plural(ended, 'session', 'sessions')} in bunker {_bunker()}, and revoked any grant made under "
+            f"{'it' if ended == 1 else 'them'}"
+        )
     return 0
 
 
@@ -865,8 +888,13 @@ def _audit(ctx: Context, args: argparse.Namespace) -> int:
     more = bool(args.count) and len(events) > args.count
     if more:
         events = events[1:]
+    # A re-key that switched vaults and stopped before setting the log aside: the log on disk was written under
+    # the key that re-key replaced, so a failure to verify it now says nothing about tampering.
+    midway = report is not None and not report.ok and archived is None and caps.unfinished_rekey() is not None
     if ctx.out.json_mode:
         verified = None if report is None else {"ok": report.ok, "count": report.count, "problems": report.problems}
+        if verified is not None and midway:
+            verified["unfinished_rekey"] = True
         ctx.out.json({"events": [dataclasses.asdict(event) for event in events], "verify": verified})
     else:
         ctx.out.table(
@@ -887,6 +915,8 @@ def _audit(ctx: Context, args: argparse.Namespace) -> int:
                 ctx.out.data("")
             if report.ok:
                 ctx.out.data(f"verified: all {report.count} records are authentic and in order")
+            elif midway:
+                ctx.out.data("NOT VERIFIED: this log was written before a re-key that has not finished")
             else:
                 found = _plural(len(report.problems), "problem", "problems")
                 ctx.out.data(f"ALTERED: the log fails verification ({found})")
@@ -905,6 +935,13 @@ def _audit(ctx: Context, args: argparse.Namespace) -> int:
         ctx.out.info(f"showing the newest {args.count} records; -n 0 shows all of them")
     if report is not None and report.ok:
         ctx.out.info("Removing the newest records, or the whole log, is the one change verification cannot detect.")
+    if midway:
+        ctx.out.warn(
+            f"a re-key of bunker {_bunker()} stopped part way, and its audit log is still the one written under the "
+            "old vault key: it cannot be checked until that re-key is finished. Run irondome rekey; it sets the log "
+            "aside and names it, and irondome audit --archive NAME --verify then checks it."
+        )
+        return 1
     if report is not None and not report.ok:
         ctx.out.warn(
             f"the audit log of bunker {_bunker()} was edited, cut or added to by something other than IronDome"

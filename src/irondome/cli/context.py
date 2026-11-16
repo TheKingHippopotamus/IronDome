@@ -39,12 +39,14 @@ import contextlib
 import hmac
 import io
 import os
+import stat
 import sys
 from typing import Iterator, List, Optional, Sequence
 
 from irondome import audit, caps, paths
 from irondome.cli.output import Output
 from irondome.errors import AuthError, HardwareError, IronDomeError, PolicyError, UsageError, VaultError
+from irondome.generator import estimate_strength
 from irondome.keys import KIND_DEVICE
 from irondome.secmem import SecureBuffer, read_secret, read_secret_from_fd
 from irondome.unlock import can_ask_for_touch, check_new_password, unlock
@@ -138,6 +140,9 @@ def readable_vault(bunker: str) -> VaultFile:
             ) from None
 
 
+_WEAK_LABELS = ("very weak", "weak")
+
+
 class _TryAgain(UsageError):
     """A new master password that was too short, or typed two different ways: worth asking for again."""
 
@@ -171,6 +176,7 @@ class Context:
         #: What the vault is being opened for, in words: shown before the master password is asked for.
         self._purpose = ""
         self._rekey_noted = False
+        self._exposure_noted = False
 
     # -- who is asking --------------------------------------------------------
 
@@ -344,11 +350,33 @@ class Context:
         while True:
             attempts -= 1
             try:
-                return self._new_master_password_once()
+                password = self._new_master_password_once()
             except _TryAgain as exc:
                 if attempts <= 0:
                     raise UsageError(str(exc)) from None
                 self.out.error(f"{exc}. Try again.")
+                continue
+            try:
+                self._warn_if_weak(password)
+            except BaseException:
+                password.wipe()
+                raise
+            return password
+
+    def _warn_if_weak(self, password: SecureBuffer) -> None:
+        """A remark, never a refusal, when a new master password is one a guessing program finds early.
+
+        Made wherever a new master password is taken (``init``, ``bunker create``, ``passwd``, ``recovery
+        use``, ``rekey``), so that none of them accepts ``password`` without a word.
+        """
+        strength = estimate_strength(password)
+        if strength.label in _WEAK_LABELS:
+            reason = f" ({strength.warnings[0]})" if strength.warnings else ""
+            self.out.warn(
+                f"that master password is {strength.label}{reason}. The device key keeps a copied vault file from "
+                "being guessed at, but whoever has this machine or its files can still try passwords: a longer "
+                "passphrase costs nothing here (irondome gen --words 6 makes one; irondome passwd changes it)"
+            )
 
     def _new_master_password_once(self) -> SecureBuffer:
         """One try. :class:`_TryAgain` for a slip of the fingers; anything else (input closed) ends it."""
@@ -445,11 +473,42 @@ class Context:
         It also says, on every unlock, that a re-key has not finished (:meth:`note_unfinished_rekey`).
         """
         self.note_unfinished_rekey(vault)
+        self._note_exposed_files()
         try:
             caps.sweep(vault=vault)
         except IronDomeError as exc:
             self.out.warn(f"could not clear expired sessions and grants: {exc}")
         return vault
+
+    def _note_exposed_files(self) -> None:
+        """Warn, once per command, when this bunker's vault, device key or their directories are open to others.
+
+        IronDome makes them owner-only, and a later ``chmod``, a restore or a sync tool can undo that. The
+        vault file is encrypted either way; a file-based device key that others can read is half of what
+        opens it. ``irondome doctor`` lists every file with its fix; this is the nudge to run it.
+        """
+        if self._exposure_noted or os.name != "posix":
+            return
+        self._exposure_noted = True
+        places = [paths.root(), paths.home(), paths.vault_file(), paths.device_dir()]
+        try:
+            places += sorted(path for path in paths.device_dir().iterdir())[:16]
+        except OSError:
+            pass
+        loose = []
+        for path in places:
+            try:
+                info = os.lstat(str(path))
+            except OSError:
+                continue
+            if not stat.S_ISLNK(info.st_mode) and info.st_mode & 0o077:
+                loose.append(f"{path} (mode {stat.S_IMODE(info.st_mode):04o})")
+        if loose:
+            more = f" and {len(loose) - 1} more" if len(loose) > 1 else ""
+            self.out.warn(
+                f"other users of this machine can reach {loose[0]}{more}; IronDome keeps these owner-only. "
+                "irondome doctor lists each one with the command that fixes it"
+            )
 
     def note_unfinished_rekey(self, vault: Optional[Vault] = None) -> None:
         """Warn, once per command, while a re-key of the current bunker has not finished, and say how to finish.
@@ -551,7 +610,8 @@ class Context:
                 _note_refusal(grant, purpose, outside, "not covered by this grant", detail)
                 raise PolicyError(
                     f"this grant does not cover {outside[0]!r}; it covers: {', '.join(sorted(grant.names()))}. "
-                    "Nothing was used"
+                    f"Nothing was used. ({ENV_GRANT} is set, so the grant answered; the owner opens the vault "
+                    "instead with --no-grant after the command's name)"
                 )
             if purpose == PURPOSE_REVEAL and grant.mode != caps.MODE_REVEAL:
                 hidden = [reference for reference in references if not grant.is_totp(reference)]
@@ -569,10 +629,11 @@ class Context:
         """Record an owner-side event. A failing audit log is a warning, not a failed command.
 
         Who did it is what proved them: ``session`` when a session token opened the vault for this
-        command, since anything that holds the token could have run it, and ``owner`` only when the
-        master password or Touch ID did.
+        command, with or without a terminal, since anything that holds the token could have run it;
+        ``agent`` when the master password or Touch ID opened it for a command that had no terminal
+        (a program ran it, not a person at a keyboard); ``owner`` otherwise.
         """
-        actor = "agent" if self.agent_mode else ("session" if self.unlocked_by == "session" else "owner")
+        actor = "session" if self.unlocked_by == "session" else ("agent" if self.agent_mode else "owner")
         try:
             with audit.owner_key(vault) as key:
                 audit.record(
@@ -656,7 +717,7 @@ class Access:
             with audit.owner_key(vault) as key:
                 audit.record(
                     key, vault_id=vault.vault_id, kid=audit.KID_VAULT, action=purpose,
-                    actor="agent" if self.ctx.agent_mode else "session",
+                    actor="session" if self.ctx.unlocked_by == "session" else "agent",
                     target=f"{entry.name}/{field}", detail=detail,
                 )
         return vault.value(entry, field)

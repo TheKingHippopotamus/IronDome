@@ -182,6 +182,12 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
         )
         try:
             kdf.derive_into(view, out.view())  # type: ignore[arg-type, unused-ignore]  # any buffer is accepted
+        except MemoryError:
+            raise VaultError(
+                f"not enough memory to stretch the password: Argon2id is set to use {params.memory_kib // 1024} MiB "
+                "and this machine would not give it that much. Free some memory and try again; for a new vault or "
+                "backup, IRONDOME_KDF_MEMORY_MIB sets a lower cost"
+            ) from None
         finally:
             # Also when the derivation failed (too little memory for its cost): the copy was made before that.
             try:

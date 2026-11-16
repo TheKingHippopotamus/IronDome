@@ -214,8 +214,8 @@ def test_an_option_written_before_the_command_is_explained_not_guessed_at(cli: C
 
 def test_a_value_too_long_to_read_names_the_limit(cli: CLI) -> None:
     init(cli, "--no-recovery")
-    refused = cli("add", "big", "--kind", "secret", "--password-stdin", "--value-stdin",
-                  stdin=PASSWORD + "\n" + "x" * 5000 + "\n")
+    refused = cli("add", "big", "--kind", "secret", "--password-stdin", "--value-stdin", "--field", "pin",
+                  stdin=PASSWORD + "\n" + "x" * 5000 + "\n1234\n")  # a value that is one line of several on stdin
     assert refused.returncode != 0 and "at most 4095 bytes" in refused.stderr
 
 

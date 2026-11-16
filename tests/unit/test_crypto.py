@@ -265,7 +265,7 @@ def test_argon2id_wipes_its_output_when_derivation_fails(monkeypatch):
 
     monkeypatch.setattr(crypto, "SecureBuffer", Recording)
     monkeypatch.setattr(crypto, "Argon2id", Broken)
-    with pytest.raises(MemoryError):
+    with pytest.raises(VaultError, match="not enough memory to stretch the password"):
         argon2id(b"password", bytes(16), SMALL)
     assert len(made) == 1 and made[0].wiped
 
@@ -846,7 +846,7 @@ def test_argon2id_is_run_again_on_zeros_even_when_the_derivation_fails(monkeypat
     monkeypatch.setattr(crypto, "Argon2id", Fake)
     salt = bytes(range(16))
     with SecureBuffer.from_buffer(b"a test password") as password:
-        with pytest.raises(MemoryError):
+        with pytest.raises(VaultError, match="not enough memory to stretch the password"):
             crypto.argon2id(password, salt, crypto.Argon2Params(memory_kib=19 * 1024))
     first, second = made
     assert first.material == b"a test password" and first.settings["salt"] == salt

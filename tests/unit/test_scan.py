@@ -67,7 +67,7 @@ def test_every_encoding_the_masker_knows_is_found(tmp_path: Path) -> None:
     """The scanner looks for exactly what `irondome run` masks, and labels each the same way."""
     forms = secret_patterns(BANK.value)
     assert {label for label, _ in forms} == {
-        "plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr"
+        "plain", "base64", "base64url", "hex", "percent", "html", "json", "shell", "repr", "doubled"
     }
     write(tmp_path / "leaks.txt", b"".join(b"<" + pattern + b">\n" for _, pattern in forms))
 
@@ -174,11 +174,11 @@ def test_nothing_returned_holds_the_value_or_any_encoding_of_it(tmp_path: Path) 
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("chunk", [1, 45, 46, 47, 50, 64, 99, 128, 4096])
+@pytest.mark.parametrize("chunk", [1, 45, 46, 47, 50, 64, 67, 68, 69, 99, 128, 4096])
 def test_an_occurrence_across_a_chunk_boundary_is_found_exactly_once(tmp_path: Path, chunk: int) -> None:
-    """A chunk is never shorter than the longest pattern less one (46 bytes here: the hex form)."""
+    """A chunk is never shorter than the longest pattern less one (68 bytes here: hex with a separator per byte)."""
     value = STRIPE.value.encode()
-    assert max(len(pattern) for pattern in forms_of(STRIPE.value)) == 46
+    assert max(len(pattern) for pattern in forms_of(STRIPE.value)) == 68
     data = bytearray()
     expected = []
     for line in range(1, 41):

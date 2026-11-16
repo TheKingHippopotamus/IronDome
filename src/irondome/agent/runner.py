@@ -205,6 +205,34 @@ def _html_forms(value: str) -> List[bytes]:
     return [text.encode("utf-8") for text in forms]
 
 
+#: What bash's ``printf %q`` (and ``${var@Q}``'s older cousin, ``set`` in posix mode) puts a backslash before.
+_BASH_ESCAPED = frozenset(" !\"$&'()*,;<>?[\\]^`{|}")
+
+
+def _bash_quoted(value: str) -> List[bytes]:
+    """*value* as bash's ``printf %q`` writes it: a backslash before each character the shell would act on.
+
+    ``#`` is escaped only where a word starts and ``~`` only where a tilde expansion could start (bash 4 and
+    later), and the value may be the whole word or the end of one (``NAME=value``), so each is given both
+    ways. A value holding a control character is written in another style (``$'...'``) and gets nothing here.
+    """
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return []
+    forms = []
+    for tilde in (False, True):
+        body = []
+        for position, char in enumerate(value):
+            before = value[position - 1] if position else ""
+            if char in _BASH_ESCAPED or (tilde and char == "~" and before in ("", ":", "=")):
+                body.append("\\")
+            body.append(char)
+        text = "".join(body)
+        forms.append(text)
+        if text.startswith("#"):
+            forms.append("\\" + text)
+    return [text.encode("utf-8") for text in forms]
+
+
 def _is_secret_line(line: bytes) -> bool:
     """Whether one line of a value of several lines is masked by itself.
 
@@ -251,28 +279,37 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
         password inside HTTP Basic credentials, ``echo "$TOKEN" | base64``
         with its trailing newline);
     ``hex``
-        lower and upper case;
+        lower and upper case, run together or with ``:`` or a space between
+        the bytes;
     ``percent``
         RFC 3986 escaping of everything but letters, digits and ``-._~``; the
         same with a space written as ``+`` (HTML forms); and the variants
         that also leave alone ``!*'()`` (JavaScript's ``encodeURIComponent``),
         ``/`` (Python's ``urllib.parse.quote`` as called without arguments)
         or the characters that structure a URL (JavaScript's ``encodeURI``);
-        each with upper- and with lower-case hex digits;
+        each with upper- and with lower-case hex digits; and each of those
+        encoded once more (``%`` written ``%25``);
     ``html``
         ``&``, ``<`` and ``>`` written as entities, with the quotes left
         alone or written ``&quot;`` and ``&#x27;``, ``&#39;`` or ``&apos;``;
     ``json``
         the body of the JSON string, as ``json.dumps`` and ``JSON.stringify``
         write it, with non-ASCII characters both literal and as ``\\uXXXX``;
-        and the same escaped once more, as it is inside a JSON document that
-        is itself carried as a string;
+        the same escaped once more, as it is inside a JSON document that is
+        itself carried as a string; and the string as Go's ``encoding/json``
+        writes it (``&``, ``<`` and ``>`` as ``\\u0026``, ``\\u003c`` and
+        ``\\u003e``) and as PHP's ``json_encode`` does (``/`` as ``\\/``);
     ``shell``
         the value as a shell quotes it: between double quotes with a
         backslash before each backslash, double quote, ``$`` and backtick
         (``export -p``, ``declare -p``), and between single quotes with each
         ``'`` written ``'\\''`` or ``'"'"'`` (``set``, ``set -x``,
-        ``shlex.quote``);
+        ``shlex.quote``); and with a backslash before each character the
+        shell would act on, as bash's ``printf %q`` writes a value that holds
+        no control character;
+    ``doubled``
+        with each ``"`` or each ``'`` written twice: a CSV field, a string
+        between single quotes in YAML or SQL;
     ``repr``
         the value as a debugger prints a string: backslashes doubled and
         control characters escaped, with and without a backslash before
@@ -307,7 +344,13 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
             forms += [(label, core) for core in _embedded_base64(raw, altchars)]
         digits = raw.hex().encode("ascii")
         forms += [("hex", digits), ("hex", digits.upper())]
-        forms += [("percent", form) for form in _percent_forms(raw)]
+        for separator in (":", " "):  # a fingerprint-style dump: 6b:65:79 or 6B 65 79
+            spaced = raw.hex(separator).encode("ascii")
+            forms += [("hex", spaced), ("hex", spaced.upper())]
+        percent = _percent_forms(raw)
+        forms += [("percent", form) for form in percent]
+        # A URL carried inside another URL's query: every % of the first encoding written %25.
+        forms += [("percent", form.replace(b"%", b"%25")) for form in percent]
         forms += [("html", form) for form in _html_forms(value)]
         escaped = json.dumps(value, ensure_ascii=False)[1:-1]
         forms += [("json", escaped.encode("utf-8")), ("json", json.dumps(value)[1:-1].encode("ascii"))]
@@ -317,14 +360,28 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
             ("json", json.dumps(json.dumps(value)[1:-1])[1:-1].encode("ascii")),
             ("json", json.dumps(escaped)[1:-1].encode("ascii")),  # literal inside, \\u escapes outside
         ]
+        # The same string as two other families of encoders write it by default. Go's encoding/json (and
+        # Rails) write &, < and > as \\u escapes so that the document can sit inside HTML; PHP's json_encode
+        # writes / as \\/ and, unless told otherwise, non-ASCII characters as \\u escapes.
+        html_safe = escaped
+        for char in "&<>\u2028\u2029":
+            html_safe = html_safe.replace(char, f"\\u{ord(char):04x}")
+        forms += [
+            ("json", html_safe.encode("utf-8")),
+            ("json", json.dumps(value)[1:-1].replace("/", "\\/").encode("ascii")),
+            ("json", escaped.replace("/", "\\/").encode("utf-8")),
+        ]
         forms += [
             ("shell", "".join("\\" + char if char in '\\"$`' else char for char in value).encode("utf-8")),
             ("shell", value.replace("'", "'\\''").encode("utf-8")),
             ("shell", value.replace("'", "'\"'\"'").encode("utf-8")),
         ]
+        forms += [("shell", form) for form in _bash_quoted(value)]
         # In a JSON string a double quote is always written as backslash-quote; a debugger leaves it alone.
         plain_quotes = escaped.replace('\\"', '"')
         forms += [("repr", plain_quotes.encode("utf-8")), ("repr", plain_quotes.replace("'", "\\'").encode("utf-8"))]
+        # A quote written twice: a CSV field, a YAML or SQL string between single quotes.
+        forms += [("doubled", value.replace(quote, quote * 2).encode("utf-8")) for quote in "\"'"]
         # A value of several lines (a private key, a certificate) that a logger prints with something in
         # front of every line never appears whole: each line long enough to be told apart is a pattern too.
         lines = [line.strip() for line in raw.splitlines()]

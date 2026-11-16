@@ -1175,3 +1175,58 @@ def test_secure_delete_syncs_the_overwrite_before_unlinking(isolated, monkeypatc
     target.write_bytes(b"content")
     paths.secure_delete(target)
     assert order == ["fsync", "unlink"]
+
+
+# -- what a write killed before its rename leaves -------------------------------------------------
+
+
+def test_sweep_temporary_takes_only_old_files_named_as_write_atomic_names_them(isolated):
+    directory = paths.ensure_dir(paths.home())
+    old = time.time() - 300
+
+    def made(name: str, *, age_old: bool = True) -> Path:
+        path = directory / name
+        path.write_bytes(b"a whole vault, as it was being written")
+        if age_old:
+            os.utime(path, (old, old))
+        return path
+
+    abandoned = [made(".tmp-abcdefgh"), made(".tmp-_9x0k2aa")]
+    young = made(".tmp-12345678", age_old=False)  # a write in progress keeps its file for milliseconds
+    others = [made(".tmp-rekey-0123456789abcdef.irondome"), made(".tmp-short"), made("vault.irondome"),
+              made(".tmp-QRSTUVWX"), made(".tmp-abcdefghi")]  # mkstemp writes lower case, digits and "_"
+    target = made("pointed-at")
+    link = directory / ".tmp-linkname"
+    os.symlink(str(target), str(link))
+    os.utime(str(link), (old, old), follow_symlinks=False)
+    folder = directory / ".tmp-dir00000"
+    folder.mkdir()
+    os.utime(folder, (old, old))
+
+    assert paths.sweep_temporary(directory) == 2
+    assert not any(path.exists() for path in abandoned)
+    assert young.exists() and all(path.exists() for path in others)
+    assert link.is_symlink() and target.exists() and folder.is_dir()
+    assert paths.sweep_temporary(directory, older_than=0) == 1 and not young.exists()
+    assert paths.sweep_temporary(directory / "not-there") == 0
+
+
+def test_a_killed_write_leaves_a_file_that_the_sweep_then_removes(isolated):
+    """SIGKILL between the write and the rename: the old file is intact and the temporary one is a whole copy."""
+    directory = paths.ensure_dir(paths.home())
+    target = directory / "vault.irondome"
+    paths.write_atomic(target, b"the old vault")
+    script = (
+        "import os, signal, sys\n"
+        "from irondome import paths\n"
+        "def kill(*args): os.kill(os.getpid(), signal.SIGKILL)\n"
+        "os.replace = kill\n"
+        "paths.write_atomic(sys.argv[1], b'the new vault, never renamed into place')\n"
+    )
+    ran = subprocess.run([sys.executable, "-c", script, str(target)], capture_output=True, timeout=60)
+    assert ran.returncode == -9
+    left = [path for path in directory.iterdir() if path.name.startswith(".tmp-")]
+    assert target.read_bytes() == b"the old vault" and len(left) == 1
+    assert left[0].read_bytes() == b"the new vault, never renamed into place"
+    assert paths.sweep_temporary(directory, older_than=0) == 1
+    assert [path.name for path in directory.iterdir()] == ["vault.irondome"]

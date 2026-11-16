@@ -1421,7 +1421,8 @@ def check_bunkers_isolated(box: Sandbox) -> CheckResult:
         device_material = {}
         for name in ("alpha", "bravo"):
             os.environ[paths.ENV_BUNKER] = name
-            device_material[name] = {path.read_bytes() for path in _files(paths.device_dir())}
+            # Empty files are not material: a TPM bunker keeps an empty lock file beside its registry.
+            device_material[name] = {path.read_bytes() for path in _files(paths.device_dir())} - {b""}
         if device_material["alpha"] & device_material["bravo"]:
             problems.append("the two bunkers share device material")
         os.environ[paths.ENV_BUNKER] = "bravo"
@@ -1442,14 +1443,14 @@ def check_bunkers_isolated(box: Sandbox) -> CheckResult:
         try:
             caps.open_session(tokens["alpha"]["session"], VaultFile.load()).wipe()
             problems.append("alpha's session file copied into bravo opened bravo")
-        except AuthError:
+        except (AuthError, HardwareError):
             pass
         try:
             with caps.open_grant(tokens["alpha"]["grant"]) as grant:
                 if grant.has("bravo-entry"):
                     problems.append("alpha's grant copied into bravo covers bravo's entry")
-        except AuthError:
-            pass
+        except (AuthError, HardwareError):
+            pass  # a TPM refuses sooner: bravo's registry does not list the index alpha's grant is bound to
         box.guard()
         report = nuke.execute(bunker="bravo")
         if not report.success:

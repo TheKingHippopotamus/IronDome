@@ -71,6 +71,8 @@ def test_no_check_touches_anything_outside_its_temporary_directory(decoy, tmp_pa
     broken = [outcome for outcome in report.outcomes if "the check itself failed" in outcome.result.detail
               or "stopped before" in outcome.result.detail]
     assert broken == []
+    assert [(outcome.claim, outcome.result.detail) for outcome in report.outcomes
+            if outcome.result.status == selftest.FAIL] == []
     assert [path for path in tmp_path.iterdir() if path.name.startswith("irondome-verify-")] == []
 
 
@@ -438,3 +440,18 @@ def test_a_long_password_is_cut_into_pieces_that_cover_all_of_it_and_are_finest_
         if length >= 528:
             assert [len(piece) for piece in pieces[-32:]] == [16] * 32
         assert max(len(piece) for piece in pieces) <= (71 if length > 2048 else 39)
+
+
+@pytest.mark.tpm
+def test_no_check_fails_on_a_tpm(tpm, tmp_path):
+    """``irondome verify`` printed FAIL for bunkers-isolated on every run with a TPM, while the claim held.
+
+    The TPM backend refuses another bunker's grant sooner than the file-based one, with a different
+    error, and the check took that refusal for a failure. Nothing in the suite ran the checks on a TPM:
+    a person did, by hand. Now the suite does, on the software TPM of ``scripts/test-linux.sh``.
+    """
+    report = selftest.run(root=tmp_path)
+    assert report.backend == "linux-tpm2"
+    assert [(outcome.claim, outcome.result.detail) for outcome in report.outcomes
+            if outcome.result.status == selftest.FAIL] == []
+    assert next(o.result.status for o in report.outcomes if o.claim == "bunkers-isolated") == selftest.PASS
