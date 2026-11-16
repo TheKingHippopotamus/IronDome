@@ -372,21 +372,17 @@ def _env_file(ctx: Context, named: Optional[str], cwd: Optional[str]) -> Optiona
     other = sorted(name for name in values if name not in own)
     if other:
         shown = scan.display_path(path)
-        example = other[0] if _ALIAS_LIKE.fullmatch(other[0]) else "NAME"
         raise UsageError(
             f"{shown} was found in the working directory and sets {_listed(other)} to something other than the "
-            "secret you keep under that name. A file nobody named may only ask for an alias (or an entry) under "
-            f"its own name, as --env does ({example}=irondome://{example}, once you have run: irondome alias set "
-            f"{example} ENTRY): anything else would let whoever wrote the file choose a variable, PATH for one, "
+            "secret you keep under that name. A file nobody named may only ask for a secret under its own name, "
+            "as --env does: NAME=irondome://NAME, where NAME is an alias (irondome alias set NAME ENTRY) or the "
+            "name of an entry. Anything else would let whoever wrote the file choose a variable, PATH for one, "
             f"and what goes into it. Read the file; if it is yours, run with: --env-file {shown}"
         )
     # Said even with -q: this is the one notice of what a file nobody named puts into the command.
     supplied = f"from the vault, each under its own name: {_listed(own)}" if own else "empty"
     ctx.out.notice(f"using {scan.display_path(path)}, found in the working directory ({supplied})")
     return values
-
-
-_ALIAS_LIKE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _asks_for_its_own_name(name: str, value: str) -> bool:
@@ -1259,9 +1255,9 @@ def _register_run(subparsers: Any, common: argparse.ArgumentParser) -> None:
                 ("irondome run --touch --env GITHUB_TOKEN -- gh pr list", ""),
             ],
             "Secrets are also taken from irondome:// values in the environment and, unless --env-file names "
-            "another file, from .env.irondome in the working directory; --env wins over both. A file found "
-            "that way may only hold NAME=irondome://NAME lines (what --env NAME does); one that holds anything "
-            "else is refused until it is named with --env-file. "
+            "another file, from .env.irondome in the directory the command runs in; --env wins over both. A "
+            "file found that way may only set NAME=irondome://NAME (what --env NAME does); one that sets "
+            "anything else is refused until it is named with --env-file. "
             "Masking prevents accidents, not intent: a command that transforms a secret before printing it "
             "gets it through. With --json the output is captured and the command reads no input.",
             "COMMAND is looked up once, before anything is unlocked, and started by the path found then. With "
@@ -1281,8 +1277,8 @@ def _register_run(subparsers: Any, common: argparse.ArgumentParser) -> None:
         "--env-file",
         metavar="FILE",
         help="VAR=VALUE lines: irondome:// references are resolved, other values passed on as they are "
-        f"(without this option, {_ENV_FILE_NAME} in the working directory is used if there is one, and may "
-        "only hold NAME=irondome://NAME lines)",
+        f"(without this option, {_ENV_FILE_NAME} in the directory the command runs in is used if there is "
+        "one, and may only set NAME=irondome://NAME)",
     )
     parser.add_argument(
         "--no-mask",
@@ -1450,7 +1446,7 @@ def _register_audit(subparsers: Any, common: argparse.ArgumentParser) -> None:
     parser = subparsers.add_parser(
         "audit",
         parents=[common],
-        help="show who used which secret, and every change",
+        help="show what grants, sessions and Touch ID approvals used, and every change",
         **_page(
             "Show the newest records of the encrypted, hash-chained audit log: every use of a grant, a session "
             "or a Touch ID approval, and every change to the vault. With --verify every line is also checked, "

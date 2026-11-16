@@ -176,7 +176,9 @@ lockout. What that pass found, and what was done:
 
 The same reviewer then checked that build by hand, twice: every item above
 held, and each time smaller faults in the fixes themselves were found (four,
-then three). They are fixed in the entries above.
+then three). They are fixed in the entries above. A last pass ran the final
+three fixes as a checklist and found no fault in them, only wording, which
+was corrected.
 
 ### Added
 
