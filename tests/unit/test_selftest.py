@@ -260,8 +260,9 @@ def found(label, where):
 def test_on_macos_the_memory_verdict_does_not_rest_on_the_system_zeroing_freed_memory():
     """The third probe document, run with MallocZeroOnFree=0: only the copy the claim's boundary names may be left.
 
-    That is Argon2id's copy of the password, made by cryptography (OpenSSL) in system-malloc memory. Any other
-    key it finds, or the password anywhere else, is a failure.
+    That is Argon2id's copy of what it was given, the prehash of the master password, made by cryptography
+    (OpenSSL) in system-malloc memory. Any other key it finds, the prehash anywhere else, or the master password
+    anywhere at all, is a failure.
     """
     clean, control = probe_document()
     assert "zeroing of freed memory turned off none but what Argon2id copies" in (
@@ -270,27 +271,31 @@ def test_on_macos_the_memory_verdict_does_not_rest_on_the_system_zeroing_freed_m
     hidden = dict(clean, needles=[found("vault key", "0x8 MALLOC_TINY rw-"), clean["needles"][1]])
     verdict = selftest.evaluate_keys_probe(clean, control, hidden)
     assert verdict.status == selftest.FAIL and "MallocZeroOnFree=0" in verdict.detail and "vault key" in verdict.detail
-    named = dict(clean, needles=[found("master password as fed to Argon2id", "0x8 MALLOC_TINY rw-"),
+    named = dict(clean, needles=[found("prehash of the master password", "0x8 MALLOC_TINY rw-"),
                                  clean["needles"][1]])
     verdict = selftest.evaluate_keys_probe(clean, control, named)
     assert verdict.status == selftest.PASS and "the boundary" in verdict.detail and "MALLOC_TINY" in verdict.detail
-    elsewhere = dict(clean, needles=[found("master password as fed to Argon2id", "0x8 anonymous rw-"),
+    elsewhere = dict(clean, needles=[found("prehash of the master password", "0x8 anonymous rw-"),
                                      clean["needles"][1]])
     assert selftest.evaluate_keys_probe(clean, control, elsewhere).status == selftest.FAIL, "not where OpenSSL copies"
+    for label in ("master password", "master password as normalised"):
+        password = dict(clean, needles=[found(label, "0x8 MALLOC_TINY rw-"), clean["needles"][1]])
+        verdict = selftest.evaluate_keys_probe(clean, control, password)
+        assert verdict.status == selftest.FAIL and label in verdict.detail, "Argon2id is never given the password"
     blind = dict(clean, needles=[clean["needles"][0], dict(clean["needles"][1], hits=[])])
     assert "proves nothing" in selftest.evaluate_keys_probe(clean, control, blind).detail
 
 
 def test_the_memory_verdict_names_every_leftover_including_those_the_derivation_leaves():
-    """The kdf run is searched right after Argon2id and HKDF: Argon2id's copy of the password is the boundary,
-    named in the verdict; any other key found there, the HKDF output included, or anything left after the vault
-    was locked, is a failure."""
+    """The kdf run is searched right after Argon2id and HKDF: Argon2id's copy of the prehash is the boundary,
+    named in the verdict; any other key found there, the master password and the HKDF output included, or
+    anything left after the vault was locked, is a failure."""
     clean, control = probe_document()
-    derivation = dict(clean, needles=[found("master password as fed to Argon2id", "0x40 MALLOC_TINY rw-")])
+    derivation = dict(clean, needles=[found("prehash of the master password", "0x40 MALLOC_TINY rw-")])
     verdict = selftest.evaluate_keys_probe(clean, control, None, derivation)
     assert verdict.status == selftest.PASS and "the boundary" in verdict.detail
-    assert "master password as fed to Argon2id" in verdict.detail
-    for label in ("vault key", "HKDF output"):
+    assert "prehash of the master password" in verdict.detail
+    for label in ("vault key", "HKDF output", "master password"):
         other = dict(clean, needles=[found(label, "0x40 anonymous rw-")])
         verdict = selftest.evaluate_keys_probe(clean, control, None, other)
         assert verdict.status == selftest.FAIL and label in verdict.detail
@@ -386,3 +391,50 @@ def test_verify_has_help_for_itself_and_its_option(cli):
     result = cli("verify", "--help")
     assert result.returncode == 0
     assert "--claim ID" in result.stdout and "never" in result.stdout and "--touch" in result.stdout
+
+
+def test_the_memory_verdict_fails_on_any_part_of_a_long_master_password_left_by_its_first_derivation():
+    """The fifth probe document: one derivation from a long master password, searched for piece by piece."""
+    clean, control = probe_document()
+    whole = {"label": "master password", "kind": "key", "expected": None, "hits": [], "length": 2000}
+    pieces = [
+        {"label": f"master password, bytes {start} to {start + 32}", "kind": "key", "expected": None, "hits": [],
+         "length": 32}
+        for start in range(0, 1984, 32)
+    ]
+    long_derivation = dict(clean, needles=[whole] + pieces + [clean["needles"][1]])
+    verdict = selftest.evaluate_keys_probe(clean, control, None, clean, long_derivation)
+    assert verdict.status == selftest.PASS
+    assert "and no part of a master password of 2000 bytes (62 pieces looked for)" in verdict.detail
+    prehash = dict(long_derivation, needles=long_derivation["needles"]
+                   + [found("prehash of the master password", "0x40 MALLOC_TINY rw-")])
+    verdict = selftest.evaluate_keys_probe(clean, control, None, clean, prehash)
+    assert verdict.status == selftest.PASS and "the boundary" in verdict.detail
+    hit = [{"address": 64, "where": "0x40 [heap] rw-p"}]
+    left = dict(long_derivation, needles=[whole] + [dict(piece, hits=hit) for piece in pieces[-5:]]
+                + [clean["needles"][1]])
+    verdict = selftest.evaluate_keys_probe(clean, control, None, clean, left)
+    assert verdict.status == selftest.FAIL
+    assert "over a master password of 2000 bytes" in verdict.detail
+    assert "master password, bytes 1824 to 1856" in verdict.detail and "and 2 more" in verdict.detail
+    blind = dict(long_derivation, needles=[whole] + pieces + [dict(clean["needles"][1], hits=[])])
+    assert "proves nothing" in selftest.evaluate_keys_probe(clean, control, None, clean, blind).detail
+    unsearched = dict(long_derivation, needles=[whole, clean["needles"][1]])
+    verdict = selftest.evaluate_keys_probe(clean, control, None, clean, unsearched)
+    assert verdict.status == selftest.FAIL and "not searched for piece by piece" in verdict.detail
+    for stats in (dict(clean["stats"], truncated=True), dict(clean["stats"], bytes_scanned=0)):
+        cut = dict(long_derivation, stats=stats)
+        for documents in ((None, clean, cut), (None, cut, long_derivation), (cut, clean, long_derivation)):
+            verdict = selftest.evaluate_keys_probe(clean, control, *documents)
+            assert verdict.status == selftest.FAIL and "cut short" in verdict.detail
+
+
+def test_a_long_password_is_cut_into_pieces_that_cover_all_of_it_and_are_finest_at_its_end():
+    for length in (8, 20, 100, 511, 512, 660, 2000, 2048, 2049, 4000, 4095):
+        text = "".join(chr(33 + index % 90) for index in range(length))
+        pieces = list(selftest.password_parts(text).values())
+        assert b"".join(pieces) == text.encode("ascii"), length
+        assert all(len(piece) >= 8 for piece in pieces) and len(pieces) <= 90
+        if length >= 528:
+            assert [len(piece) for piece in pieces[-32:]] == [16] * 32
+        assert max(len(piece) for piece in pieces) <= (71 if length > 2048 else 39)

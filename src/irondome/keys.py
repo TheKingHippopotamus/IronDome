@@ -4,11 +4,19 @@ One random 256-bit **vault key** encrypts everything. It is never stored. A
 vault file carries one or more *keyslots*, each holding the vault key wrapped
 (AES-256-GCM) under a key-encryption key derived from that slot's factors::
 
-    password slot   Argon2id(master password)  +  device secret
+    password slot   Argon2id(prehash of the master password)  +  device secret
     device slot     device secret under a biometric policy      (Touch ID)
     recovery slot   a 160-bit recovery key shown once at setup
 
     factor keys ──HKDF──▶ key-encryption key ──AES-256-GCM──▶ vault key
+
+The master password is never handed to Argon2id as it is. IronDome first
+derives 32 bytes from it (HKDF-SHA256 under the slot's salt, into locked
+memory), and Argon2id stretches those: the *prehash*. Argon2id in
+pyca/cryptography (OpenSSL) copies whatever it is given into memory it frees
+without overwriting; this way that copy is of 32 bytes that stand in for the
+password at this one keyslot, never of the password itself, which a person
+may use elsewhere too. See :func:`stretch_password`.
 
 A **password slot** needs both factors. The device secret comes from a
 :mod:`irondome.device` backend (Secure Enclave, TPM 2.0, or a file where there
@@ -90,6 +98,7 @@ __all__ = [
     "record_retirement",
     "finish_retirement",
     "normalise_password",
+    "stretch_password",
     "format_recovery_key",
     "parse_recovery_key",
 ]
@@ -111,6 +120,7 @@ _BASE32 = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 _BASE32_VALUE = {chr(code): value for value, code in enumerate(_BASE32)}
 _BASE32_VALUE.update({"0": _BASE32_VALUE["O"], "1": _BASE32_VALUE["I"], "8": _BASE32_VALUE["B"]})
 
+_LABEL_PASSWORD = b"irondome/v4/password"
 _LABEL_SLOT = b"irondome/v4/slot\x00"
 _LABEL_KEK = b"irondome/v4/kek/"
 _LABEL_DEVICE = b"irondome/v4/device/"
@@ -182,8 +192,8 @@ class Keyslot:
             if not isinstance(kdf, dict) or kdf.get("alg") != "argon2id":
                 raise VaultError("password keyslot has no Argon2id parameters")
             Argon2Params.from_dict(kdf)
-            if len(b64d(kdf.get("salt"), what="Argon2id salt")) < SALT_LEN:
-                raise VaultError("Argon2id salt is too short")
+            if len(b64d(kdf.get("salt"), what="Argon2id salt")) != SALT_LEN:
+                raise VaultError(f"Argon2id salt is not {SALT_LEN} bytes long")
         elif kdf is not None:
             raise VaultError(f"{kind} keyslot must not carry password parameters")
         if kind == KIND_DEVICE and not isinstance(device, dict):
@@ -236,7 +246,7 @@ class Keyslot:
 
 
 def normalise_password(password: BufferLike) -> SecureBuffer:
-    """Return the bytes that are fed to Argon2id.
+    """Return the bytes of the master password that the key is derived from.
 
     ASCII passwords are used exactly as typed. Anything else is normalised to
     Unicode NFKC first, so the same passphrase typed on a different keyboard
@@ -339,6 +349,29 @@ def _encode_utf8(text: str) -> SecureBuffer:
         out.wipe()
         raise
     return out
+
+
+def stretch_password(secret: BufferLike, salt: bytes, params: Argon2Params) -> SecureBuffer:
+    """The password factor of a keyslot: Argon2id over a prehash of the normalised master password.
+
+    ``Argon2id(HKDF-SHA256(password, salt, "irondome/v4/password"), salt)``.
+    The first step costs nothing to an attacker and is not there for strength:
+    Argon2id does all the stretching. It is there for what stays in memory.
+    Argon2id in pyca/cryptography copies its input into memory it frees
+    without overwriting, and :func:`irondome.crypto.argon2id` can only get that
+    block overwritten when the allocator hands it back, which it was measured
+    not to do for the tail of an input longer than about 650 bytes. HKDF reads
+    the password a block at a time and was found to leave no copy of it at any
+    length. So the only input Argon2id ever copies is 32 bytes long.
+
+    The prehash is as secret as the password is for this one slot: it opens
+    the slot as the password would, and whoever reads it and knows the salt,
+    which is in the vault file, can test guesses of the password against it
+    at the speed of SHA-256. It lives in a locked buffer and is zeroed before
+    this returns.
+    """
+    with hkdf(secret, info=_LABEL_PASSWORD, salt=salt) as prehash:
+        return argon2id(prehash, salt, params)
 
 
 def format_recovery_key(raw: BufferLike) -> str:
@@ -482,7 +515,7 @@ def create_password_slot(
     salt = os.urandom(SALT_LEN)
     descriptor: Optional[Dict[str, Any]] = None
     names = ["password"]
-    with normalise_password(password) as secret, argon2id(secret, salt, params) as password_key:
+    with normalise_password(password) as secret, stretch_password(secret, salt, params) as password_key:
         factors = [password_key]
         device_key: Optional[SecureBuffer] = None
         try:
@@ -606,7 +639,9 @@ def open_slot(
                         raise VaultError("password keyslot has no Argon2id parameters")
                     params = Argon2Params.from_dict(slot.kdf)
                     with normalise_password(password) as secret:
-                        password_key = argon2id(secret, b64d(slot.kdf.get("salt"), what="Argon2id salt"), params)
+                        password_key = stretch_password(
+                            secret, b64d(slot.kdf.get("salt"), what="Argon2id salt"), params
+                        )
                     factors.append(password_key)
                     names.append("password")
                     auth = hkdf(password_key, info=_LABEL_DEVICE_AUTH, salt=binding)

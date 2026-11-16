@@ -171,11 +171,11 @@ narrow, short-lived grants, and rotate what they used.
 | | |
 | --- | --- |
 | Encryption | AES-256-GCM; names, usernames, URLs, tags, aliases and notes are encrypted too, and record sizes are padded |
-| Master password | Argon2id: 256 MiB, 3 passes, 4 lanes by default; 64 MiB on a machine with less than 3 GiB of RAM |
+| Master password | Argon2id: 256 MiB, 3 passes, 4 lanes by default; 64 MiB on a machine with less than 3 GiB of RAM. It is applied to a 32-byte prehash of the password (HKDF-SHA256), never to the password itself |
 | Device binding | Secure Enclave (macOS) · TPM 2.0 NV storage (Linux) · file-based fallback, labelled as such |
 | Touch ID | Enforced by the Secure Enclave on the key operation, not by a prompt in front of a readable key |
 | Wrong guesses | On a TPM, checked and rate-limited by the chip |
-| Memory | IronDome keeps keys in pages outside the Python heap, locked into RAM where the system allows it, and wipes them; a test scans process memory to prove it. Argon2id inside the `cryptography` library leaves a copy of the master password, which IronDome gets overwritten by deriving again from zeros, best effort (see the claim's boundary) |
+| Memory | IronDome keeps keys in pages outside the Python heap, locked into RAM where the system allows it, and wipes them; a test scans process memory to prove it. Argon2id inside the `cryptography` library leaves a copy of what it is given: IronDome gives it the prehash, never the master password, and gets that copy overwritten by deriving again from zeros, best effort (see the claim's boundary) |
 | Self-destruct | `irondome nuke` destroys the device secrets first: a restored copy of the vault no longer opens with the master password (a recovery key you kept still opens it, and so does a backup made with `irondome export`) |
 | Network | None: no module imports a networking library, and every command works with socket creation disabled |
 | Dependencies | One direct dependency: [`cryptography`](https://cryptography.io), which brings `cffi` and `pycparser` (and `typing-extensions` on Python 3.9 and 3.10) |
@@ -204,9 +204,11 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   the prompt before you touch.
 * **Decrypted entries are ordinary strings** for as long as a command runs.
   Only IronDome's own copies of key material stay in locked, wiped memory:
-  Argon2id inside `cryptography` leaves a copy of the master password, which
-  IronDome gets overwritten by deriving again from zeros. That depends on the
-  allocator and is not a guarantee.
+  Argon2id inside `cryptography` leaves a copy of what it is given. IronDome
+  gives it a 32-byte prehash of the master password, never the password, and
+  gets that copy overwritten by deriving again from zeros. That depends on
+  the allocator and is not a guarantee; whoever reads a prehash that was left
+  can test guesses of the password against it.
 * **Masking stops accidents, not intent.** A command that transforms a secret
   on purpose gets it through, and a `--reveal` grant or an entry marked
   `--agent reveal` lets an agent see the value.

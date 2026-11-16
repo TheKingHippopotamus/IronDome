@@ -1543,16 +1543,79 @@ def check_keys_wiped(box: Sandbox) -> CheckResult:
         if sys.platform == "darwin":
             runs.append(("keys", password, _UNZEROED))
         documents = memory_probes(base, runs, environment=_backend_environment())
+        long_derivation = long_password_probe(base / "long", environment=_backend_environment())
     clean, control, derivation = documents[:3]
-    return evaluate_keys_probe(clean, control, documents[3] if len(documents) > 3 else None, derivation)
+    return evaluate_keys_probe(
+        clean, control, documents[3] if len(documents) > 3 else None, derivation, long_derivation
+    )
 
 
-#: The copy the claim's boundary names, by probe label: Argon2id in pyca/cryptography (OpenSSL) copies the
-#: password it is given into system-malloc memory it frees without overwriting, and IronDome cannot wipe it.
-#: A scan that leaves freed memory unzeroed, or one made right after a derivation, may find it. Anything else
-#: is a failure: HKDF's copy of the key it derives is overwritten by irondome.crypto.hkdf, which derives again
-#: from zeros. (The labels are _LABEL_PASSWORD and _LABEL_NORMALISED, defined with the probe below.)
-_ARGON2_INPUT = ("master password", "master password as fed to Argon2id")
+#: A master password longer than this is one whose copy inside Argon2id was found left behind, in part, when
+#: Argon2id was still given the password itself. The check derives from one well beyond it.
+_LONG_PASSWORD = 2000
+_PART = 16
+_FINE = 512
+_LABEL_PART = "master password, bytes"
+
+
+def password_parts(text: str) -> Dict[str, bytes]:
+    """An ASCII password cut into the pieces a scan looks for, so that a copy of only some of it is found too.
+
+    The last 512 bytes into pieces of 16: the copy that used to be left was of the end. What comes before
+    into pieces of 32, or of 64 in a password longer than 2,048 bytes, to stay within the number of needles a
+    probe takes. A scan finds whole pieces: a copy of fewer bytes than two pieces less one (31 at the end,
+    up to 127 before it) can lie across a cut and be missed.
+    """
+    raw = text.encode("ascii")
+    coarse = 2 * _PART if len(raw) <= 2048 else 4 * _PART
+    cuts = [len(raw)]
+    while cuts[-1] > 0:
+        step = _PART if len(raw) - cuts[-1] < _FINE else coarse
+        cuts.append(max(0, cuts[-1] - step))
+    cuts.reverse()
+    if len(cuts) > 2 and cuts[1] < memscan.MIN_NEEDLE:  # a first piece too short to search for joins the next
+        del cuts[1]
+    return {
+        f"{_LABEL_PART} {start} to {end}": raw[start:end]
+        for start, end in zip(cuts, cuts[1:])
+        if end - start >= memscan.MIN_NEEDLE
+    }
+
+
+def long_password_probe(
+    directory: Path,
+    *,
+    length: int = _LONG_PASSWORD,
+    environment: Optional[Mapping[str, str]] = None,
+    control: bool = False,
+) -> Dict[str, Any]:
+    """The ``kdf-first`` probe with a master password of *length* random characters, searched for piece by piece.
+
+    One derivation, the first the process makes, as in a command that unlocks
+    a vault: that is the one after which a part of a long password was found
+    left when Argon2id was given the password itself. Freed memory is left
+    unzeroed on macOS, as glibc leaves it.
+
+    With *control* the probe does what IronDome must not (``kdf-control``):
+    it gives Argon2id the password. Where the library and the allocator
+    leave a part of that copy, this is the run that shows the search would
+    find it.
+    """
+    text = secrets.token_urlsafe(length)[:length]
+    own = dict(environment or {})
+    own.update(_UNZEROED)
+    mode = "kdf-control" if control else "kdf-first"
+    return memory_probe(directory, mode, secret=text, needles=password_parts(text), environment=own)
+
+
+#: The copy the claim's boundary names, by probe label: Argon2id in pyca/cryptography (OpenSSL) copies what
+#: it is given into system-malloc memory it frees without overwriting, and IronDome cannot wipe it. What it
+#: is given is the 32-byte prehash keys.stretch_password makes of the master password, never the password.
+#: A scan that leaves freed memory unzeroed, or one made right after a derivation, may find that copy.
+#: Anything else is a failure, a copy of the master password in any form above all: HKDF's copy of the key
+#: it derives is overwritten by irondome.crypto.hkdf, which derives again from zeros. (The label is
+#: _LABEL_PREHASH, defined with the probe below.)
+_ARGON2_INPUT = ("prehash of the master password",)
 
 
 def _leftovers(document: Dict[str, Any], allowed: Sequence[str] = (), *, only: bool = False) -> List[str]:
@@ -1581,17 +1644,25 @@ def evaluate_keys_probe(
     control: Dict[str, Any],
     unzeroed: Optional[Dict[str, Any]] = None,
     derivation: Optional[Dict[str, Any]] = None,
+    long_derivation: Optional[Dict[str, Any]] = None,
 ) -> CheckResult:
     """Judge the probe documents of the keys-wiped check.
 
     *clean* and *control* are the ``keys`` and ``keys-control`` runs;
     *unzeroed* the macOS ``keys`` run without zero-on-free; *derivation* the
-    ``kdf`` run, searched right after Argon2id and HKDF. Every leftover found
-    in any of them is named.
+    ``kdf`` run, searched right after Argon2id and HKDF; *long_derivation*
+    the same with a long master password, searched for piece by piece (see
+    :func:`long_password_probe`). Every leftover found in any of them is
+    named.
     """
     stats = clean["stats"]
     if not stats["whole_address_space"] or stats["truncated"] or not stats["bytes_scanned"]:
         return _failed("the scan did not cover the whole address space")
+    for document in (unzeroed, derivation, long_derivation):
+        if document is not None and (document["stats"]["truncated"] or not document["stats"]["bytes_scanned"]):
+            return _failed("a scan was cut short, so it proves nothing")
+    if long_derivation is not None and not _pieces(long_derivation):
+        return _failed("the long master password was not searched for piece by piece, so that scan proves nothing")
     problems = []
     leftovers = _leftovers(clean)
     if leftovers:
@@ -1609,9 +1680,18 @@ def evaluate_keys_probe(
             "right after Argon2id and HKDF, outside the locked buffers that hold them, memory held "
             + "; ".join(made)
         )
+    longer = _leftovers(long_derivation, _ARGON2_INPUT) if long_derivation is not None else []
+    if longer:
+        more = f" and {len(longer) - 3} more" if len(longer) > 3 else ""
+        problems.append(
+            f"right after Argon2id and HKDF over a master password of {_password_length(long_derivation)} bytes, "
+            "outside the locked buffers that hold them, memory held " + "; ".join(longer[:3]) + more
+        )
     if problems:
         return _failed(". ".join(problems))
-    probes = [clean, control] + [document for document in (unzeroed, derivation) if document is not None]
+    probes = [clean, control] + [
+        document for document in (unzeroed, derivation, long_derivation) if document is not None
+    ]
     controls = [needle for document in probes for needle in document["needles"] if needle["kind"].startswith("control")]
     blind = [
         needle["label"]
@@ -1630,9 +1710,17 @@ def evaluate_keys_probe(
         else ""
     )
     source = "; right after Argon2id and HKDF, none but what Argon2id copies" if derivation is not None else ""
-    inside = (_leftovers(unzeroed, _ARGON2_INPUT, only=True) if unzeroed is not None else []) + (
-        _leftovers(derivation, _ARGON2_INPUT, only=True) if derivation is not None else []
-    )
+    if long_derivation is not None:
+        source += (
+            f", and no part of a master password of {_password_length(long_derivation)} bytes "
+            f"({_pieces(long_derivation)} pieces looked for)"
+        )
+    inside = [
+        entry
+        for document in (unzeroed, derivation, long_derivation)
+        if document is not None
+        for entry in _leftovers(document, _ARGON2_INPUT, only=True)
+    ]
     named = (
         " (the boundary: copies made inside pyca/cryptography, which IronDome cannot wipe, found this time: "
         + "; ".join(inside)
@@ -1645,6 +1733,21 @@ def evaluate_keys_probe(
         f"no copy of any of {len(keys_checked)} keys ({', '.join(keys_checked[:4])}, ...){also}{source}{named}; the "
         "deliberate copies kept or dropped as bytes were all found"
     )
+
+
+def _pieces(document: Dict[str, Any]) -> int:
+    """How many pieces of a long master password a ``kdf-first`` probe recorded and searched for."""
+    return sum(
+        1
+        for needle in document["needles"]
+        if needle["kind"] == "key" and needle["label"].startswith(_LABEL_PART) and needle.get("recorded", 1)
+    )
+
+
+def _password_length(document: Optional[Dict[str, Any]]) -> int:
+    """The length of the master password a ``kdf`` probe derived from."""
+    needles = document["needles"] if document is not None else []
+    return max((needle["length"] for needle in needles if needle["label"] == _LABEL_PASSWORD), default=0)
 
 
 def _backend_environment() -> Dict[str, str]:
@@ -1757,7 +1860,8 @@ def _guarded(check: Callable[[Sandbox], CheckResult], box: Sandbox) -> CheckResu
 # ---------------------------------------------------------------------------
 
 _LABEL_PASSWORD = "master password"  # noqa: S105 - a label, not a credential
-_LABEL_NORMALISED = "master password as fed to Argon2id"
+_LABEL_NORMALISED = "master password as normalised"
+_LABEL_PREHASH = "prehash of the master password"
 _LABEL_ARGON2 = "Argon2id output"
 _LABEL_HKDF = "HKDF output"
 _LABEL_HKDF_EXTRACTED = "key HKDF extracts"
@@ -1777,6 +1881,7 @@ _ENTRY_VALUE = "an ordinary entry value"
 _PROBE_CAPACITY = 96
 
 _INFO_LABELS = (
+    (b"irondome/v4/password", _LABEL_PREHASH),
     (b"irondome/v4/kek/password/", "key-encryption key of the password keyslot"),
     (b"irondome/v4/kek/device/", "key-encryption key of the Touch ID keyslot"),
     (b"irondome/v4/kek/recovery/", "key-encryption key of the recovery keyslot"),
@@ -1887,7 +1992,7 @@ def _start_probe(
     extra = [_masked_needle(label, data, "key") for label, data in needles.items() if len(data) >= memscan.MIN_NEEDLE]
     for label, text in controls.items():
         extra.extend(_masked_needle(name, data, "value") for name, data in _text_forms(label, text).items())
-    if mode.startswith("keys") or mode == "kdf":
+    if mode.startswith("keys") or mode.startswith("kdf"):
         extra.extend(_masked_needle(name, data, "key") for name, data in _text_forms(_LABEL_PASSWORD, secret).items())
         normalised = unicodedata.normalize("NFKC", secret)
         if normalised != secret:
@@ -1945,10 +2050,14 @@ def memory_probe(
     it. ``keys-control`` does the same but deliberately keeps a ``bytes``
     copy of the vault key. ``grant``: *secret* is a grant token; the probe
     opens it, reads every value and searches its writable memory. ``kdf``:
-    the master password *secret* is normalised, stretched with Argon2id and
-    expanded with HKDF, twice, and the writable memory is searched right
-    after the second time, the four live buffers left out: what the
-    derivation itself leaves behind.
+    the master password *secret* is normalised, its prehash made with HKDF,
+    that stretched with Argon2id and expanded with HKDF, twice, and the
+    writable memory is searched right after the second time, the five live
+    buffers left out: what the derivation itself leaves behind.
+    ``kdf-first``: the same done once, the first derivation the process
+    makes, and searched at once. ``kdf-control``: as ``kdf-first``, but
+    Argon2id is given the password itself, which IronDome never does: the
+    control that shows what that search finds.
 
     *needles* are further secrets to search for (sent masked), *controls*
     values that must be found (in grant mode, what the grant hands out).
@@ -2030,7 +2139,7 @@ def _read_line(fd: int) -> bytes:
 
 def probe_main(mode: str) -> None:
     """The probe process (see :func:`memory_probe`). Prints its report as JSON."""
-    if mode not in ("keys", "keys-control", "grant", "kdf"):
+    if mode not in ("keys", "keys-control", "grant", "kdf", "kdf-first", "kdf-control"):
         raise SystemExit(f"unknown probe mode {mode!r}")
     request = json.loads(_read_line(0).decode("utf-8"))
     # Everything the end of the probe needs is made now: from the end of the work to the last page
@@ -2038,9 +2147,10 @@ def probe_main(mode: str) -> None:
     scanner = memscan.open_scanner(capacity=_PROBE_CAPACITY)
     scan = scanner.scan
     collect = gc.collect
-    writable_only = mode in ("grant", "kdf")
-    skip: List[List[int]] = [[0, 0], [0, 0], [0, 0], [0, 0]]  # live buffers the kdf scan leaves out, filled in place
-    live: List[Any] = [None, None, None, None]
+    derives = mode.startswith("kdf")
+    writable_only = mode == "grant" or derives
+    skip: List[List[int]] = [[0, 0], [0, 0], [0, 0], [0, 0], [0, 0]]  # live buffers the kdf scan leaves out
+    live: List[Any] = [None, None, None, None, None]
     table = memscan.NeedleTable(capacity=_PROBE_CAPACITY, size=128 * 1024)
     # The control run does all the same work, but searches only for its deliberate copies.
     scanned = memscan.NeedleTable(capacity=8, size=4096) if mode == "keys-control" else table
@@ -2059,9 +2169,9 @@ def probe_main(mode: str) -> None:
     session_refused = None
     if mode == "grant":
         backend_name, session_refused = _probe_grant(keep)
-    elif mode == "kdf":
+    elif derives:
         backend_name = "none"
-        _probe_kdf(table, live, skip)
+        _probe_kdf(table, live, skip, twice=mode == "kdf", direct=mode == "kdf-control")
     else:
         backend_name = _probe_keys(table, scanned, kinds, expected, keep, keep_vault_key=mode == "keys-control")
     position = 0
@@ -2069,9 +2179,9 @@ def probe_main(mode: str) -> None:
         dropped[position] = 0
         position += 1
     del plain
-    if mode != "kdf":  # a collection runs finalizers, and those allocate: the kdf scan must follow at once
+    if not derives:  # a collection runs finalizers, and those allocate: the kdf scan must follow at once
         collect()
-    result = scan(scanned, exclude=skip if mode == "kdf" else (), writable_only=writable_only)
+    result = scan(scanned, exclude=skip if derives else (), writable_only=writable_only)
     for buffer in live:
         if buffer is not None:
             buffer.wipe()
@@ -2265,15 +2375,35 @@ def _probe_grant(keep: List[Any]) -> Tuple[str, bool]:
     return backend.name, refused
 
 
-def _probe_kdf(table: memscan.NeedleTable, live: List[Any], skip: List[List[int]]) -> None:
-    """Derive keys the way an unlock does: Argon2id over the master password (second input line), HKDF over that.
+def _probe_kdf(
+    table: memscan.NeedleTable, live: List[Any], skip: List[List[int]], *, twice: bool = True, direct: bool = False
+) -> None:
+    """Derive keys the way an unlock does, from the master password on the second input line.
+
+    HKDF makes the prehash of the normalised password, Argon2id stretches
+    the prehash, HKDF expands the result: the steps of
+    :func:`irondome.keys.stretch_password` and of what follows it, taken
+    one at a time so that each value can be looked for.
 
     Twice. The first time records what to look for; the scan follows the
     second time at once, so whatever those calls leave behind is still where
-    they left it. The four buffers that legitimately hold the secrets (the
-    password, as read and as normalised, and the two keys) stay alive in
-    *live* and are left out of the scan through *skip*, both made by the
-    caller before the work, so that filling them makes nothing.
+    they left it. The five buffers that legitimately hold the secrets (the
+    password, as read and as normalised, its prehash and the two keys) stay
+    alive in *live* and are left out of the scan through *skip*, both made
+    by the caller before the work, so that filling them makes nothing.
+
+    Without *twice* (the ``kdf-first`` probe) the derivation is made once,
+    the first of the process, as a command that unlocks a vault makes it,
+    and what it made is recorded from the live buffers afterwards. What the
+    library leaves behind can differ between its first run in a process and
+    a later one: the first is when it sets itself up, and it is the run
+    after which the tail of a long password was found left, when Argon2id
+    was still given the password. The caller has the password's pieces in
+    the table already.
+
+    *direct* (the ``kdf-control`` probe) is the control of that search: it
+    gives Argon2id the normalised password instead of the prehash, which is
+    what :func:`irondome.keys.stretch_password` exists to avoid.
     """
     password = read_secret_from_fd(0)
     if password is None:
@@ -2281,25 +2411,34 @@ def _probe_kdf(table: memscan.NeedleTable, live: List[Any], skip: List[List[int]
     salt = os.urandom(crypto.SALT_LEN)
     params = crypto.default_argon2()
     table.add(password, _LABEL_PASSWORD)
-    with keys.normalise_password(password) as fed:
-        table.add(fed, _LABEL_NORMALISED)
-        with crypto.argon2id(fed, salt, params) as stretched:
-            table.add(stretched, _LABEL_ARGON2)
-            with crypto.hkdf(stretched, _KDF_INFO, salt) as derived:
-                table.add(derived, _LABEL_HKDF)
-            # What HKDF extracts from its input before it expands it (RFC 5869: HMAC of the input under the
-            # salt). Made here only to be looked for; made a second time from zeros, as crypto.hkdf does, so
-            # that what computing it left behind is not what the scan finds.
-            extracted = hmac.digest(salt, stretched.view(), "sha256")
-            table.add(extracted, _LABEL_HKDF_EXTRACTED)
-            wipe_bytes(extracted)
-            wipe_bytes(hmac.digest(salt, bytes(len(stretched)), "sha256"))
+    if twice:
+        with keys.normalise_password(password) as fed:
+            table.add(fed, _LABEL_NORMALISED)
+            with crypto.hkdf(fed, keys._LABEL_PASSWORD, salt) as prehash:
+                table.add(prehash, _LABEL_PREHASH)
+                with crypto.argon2id(prehash, salt, params) as stretched:
+                    table.add(stretched, _LABEL_ARGON2)
+                    with crypto.hkdf(stretched, _KDF_INFO, salt) as derived:
+                        table.add(derived, _LABEL_HKDF)
+                    # What HKDF extracts from its input before it expands it (RFC 5869: HMAC of the input under
+                    # the salt). Made here only to be looked for; made a second time from zeros, as crypto.hkdf
+                    # does, so that what computing it left behind is not what the scan finds.
+                    extracted = hmac.digest(salt, stretched.view(), "sha256")
+                    table.add(extracted, _LABEL_HKDF_EXTRACTED)
+                    wipe_bytes(extracted)
+                    wipe_bytes(hmac.digest(salt, bytes(len(stretched)), "sha256"))
     live[0] = password
     live[1] = keys.normalise_password(password)
-    live[2] = crypto.argon2id(live[1], salt, params)
-    live[3] = crypto.hkdf(live[2], _KDF_INFO, salt)
+    live[2] = crypto.hkdf(live[1], keys._LABEL_PASSWORD, salt)
+    live[3] = crypto.argon2id(live[1] if direct else live[2], salt, params)
+    live[4] = crypto.hkdf(live[3], _KDF_INFO, salt)
+    if not twice:
+        table.add(live[1], _LABEL_NORMALISED)
+        table.add(live[2], _LABEL_PREHASH)
+        table.add(live[3], _LABEL_ARGON2)
+        table.add(live[4], _LABEL_HKDF)
     index = 0
-    while index < 4:
+    while index < 5:
         skip[index][0] = live[index]._address
         skip[index][1] = live[index]._length
         index += 1

@@ -21,9 +21,9 @@ How IronDome 4 is put together. For what it defends against, read
 ## Key hierarchy
 
 ```
- master password ──Argon2id──▶ password key ───────────────┐
-                                                           ├─HKDF─▶ key-encryption key ─AES-256-GCM─▶ vault key
- chip or file ──▶ device secret ──HKDF──▶ device key ──────┘
+ master password ──HKDF──▶ prehash ──Argon2id──▶ password key ──┐
+                                                                 ├─HKDF─▶ key-encryption key ─AES-256-GCM─▶ vault key
+ chip or file ──▶ device secret ──HKDF──▶ device key ────────────┘
 
  recovery key (160 bit) ──HKDF──▶ recovery factor ──HKDF──▶ key-encryption key ─AES-256-GCM─▶ vault key
 
@@ -32,7 +32,13 @@ How IronDome 4 is put together. For what it defends against, read
             └─HKDF─▶ audit key ─HKDF─▶ per-grant audit keys
 ```
 
-Every HKDF is HKDF-SHA256. In a keyslot the device key and the
+Every HKDF is HKDF-SHA256. The prehash is
+`HKDF(master password, salt = the keyslot's Argon2id salt, label
+"irondome/v4/password")`, 32 bytes, and it is all Argon2id is given: the
+library that runs Argon2id copies its input into memory it frees without
+overwriting, and this keeps the password itself out of that copy (see
+[Memory](#memory)). It adds no strength and is not meant to; Argon2id does
+the stretching. In a keyslot the device key and the
 key-encryption key are salted with the vault id and the slot id, and the
 wrapped key's associated data names both and the slot's kind, so a wrapped
 key cannot be moved to another slot or another vault. A device (Touch ID)
@@ -44,10 +50,10 @@ file backends ignore it.
 
 | Keyslot | Factors | Opens with |
 | --- | --- | --- |
-| password | Argon2id(master password) + device secret | the password, on this machine |
+| password | Argon2id(prehash of the master password) + device secret | the password, on this machine |
 | device | device secret under a biometric policy | Touch ID, on this machine |
 | recovery | a 160-bit key shown once | the recovery key, on any machine |
-| backup password | Argon2id(backup password), no device secret | the password, on any machine (only in a file written by `irondome export`) |
+| backup password | Argon2id(prehash of the backup password), no device secret | the password, on any machine (only in a file written by `irondome export`) |
 
 Setup modes are just combinations of slots:
 
@@ -148,8 +154,8 @@ records:   { entry id: AES-256-GCM( entry key ) }   password, TOTP seed, notes, 
 
 ## Memory
 
-Key material — the password as typed, Argon2id output, device secret,
-key-encryption key, vault key, subkeys — lives only in `SecureBuffer`s:
+Key material — the password as typed, its prehash, Argon2id output, device
+secret, key-encryption key, vault key, subkeys — lives only in `SecureBuffer`s:
 anonymous pages outside the Python heap, locked into RAM where the system
 allows it (`irondome doctor` warns when it does not), filled in place
 (the KDFs derive *into* them, the cipher decrypts *into* them, the Secure

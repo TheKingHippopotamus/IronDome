@@ -1087,6 +1087,7 @@ def test_a_missing_required_field_is_refused(documents, field):
         {"alg": "argon2id", "salt": b64e(bytes(16)), "m": "65536", "t": 3, "p": 4},
         {"alg": "argon2id", "salt": b64e(bytes(16)), "m": True, "t": 3, "p": 4},
         {"alg": "argon2id", "salt": b64e(bytes(15)), "m": 65536, "t": 3, "p": 4},
+        {"alg": "argon2id", "salt": b64e(bytes(17)), "m": 65536, "t": 3, "p": 4},
         {"alg": "argon2id", "salt": None, "m": 65536, "t": 3, "p": 4},
         {"alg": "argon2id", "salt": 5, "m": 65536, "t": 3, "p": 4},
         {"alg": "argon2id", "salt": "!!", "m": 65536, "t": 3, "p": 4},
@@ -1221,3 +1222,66 @@ def test_an_accepted_slot_with_a_hostile_descriptor_fails_cleanly_when_opened(do
             open_slot(slot, VAULT_ID, password=PASSWORD, interactive=False)
         with pytest.raises((VaultError, HardwareError)):
             destroy_slot_device(slot)
+
+
+# ---------------------------------------------------------------------------
+# The password factor: Argon2id over a prehash, never over the password
+# ---------------------------------------------------------------------------
+
+
+def test_the_password_factor_is_argon2id_over_an_hkdf_prehash_of_the_password() -> None:
+    """The derivation, pinned: it is part of the vault format.
+
+    Worked out here without IronDome: RFC 5869 by hand with the standard
+    library's HMAC, then Argon2id from pyca/cryptography over the 32 bytes.
+    """
+    import hmac
+
+    from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
+
+    password, salt = b"correct horse battery staple", bytes(range(16))
+    extracted = hmac.digest(salt, password, "sha256")
+    prehash = hmac.digest(extracted, b"irondome/v4/password\x01", "sha256")
+    assert prehash.hex() == "e96fdf1fc7d8d21cac95f4c20be0e16189c50b6d4b152b09d85f857c1eb8a86b"
+    expected = Argon2id(salt=salt, length=32, iterations=2, lanes=1, memory_cost=19 * 1024).derive(prehash)
+    assert expected.hex() == "4a9de2077b77447f76ab31e434b60c6d486a5364b1c2e5193b88f68f505e972c"
+    with keys.stretch_password(password, salt, Argon2Params(memory_kib=19 * 1024, iterations=2, lanes=1)) as key:
+        assert bytes(key.view()) == expected
+    plain = Argon2id(salt=salt, length=32, iterations=2, lanes=1, memory_cost=19 * 1024).derive(password)
+    assert plain != expected
+
+
+@pytest.mark.parametrize("length", [1, 8, 64, 700, 4000])
+def test_argon2id_is_never_given_the_master_password(monkeypatch: pytest.MonkeyPatch, length: int) -> None:
+    """Making a password keyslot and opening it: every input Argon2id gets is 32 bytes, and none is the password.
+
+    Argon2id in pyca/cryptography copies what it is given into memory it
+    frees without overwriting. What it is given is the prehash, and after it
+    32 zero bytes (the repeat that has the library overwrite that copy).
+    """
+    given: List[bytes] = []
+    real = crypto.Argon2id
+
+    def spying(**kwargs: Any) -> Any:
+        kdf = real(**kwargs)
+
+        class Recorder:
+            def derive_into(self, material: Any, buffer: Any) -> Any:
+                given.append(bytes(material))
+                return kdf.derive_into(material, buffer)
+
+        return Recorder()
+
+    monkeypatch.setattr(crypto, "Argon2id", spying)
+    password = (b"a long master password, " * 200)[:length]
+    vault_id = os.urandom(VAULT_ID_LEN)
+    with keys.new_vault_key() as vault_key:
+        slot = create_password_slot(vault_key, password, vault_id, params=FAST, backend=None)
+        with open_slot(slot, vault_id, password=password) as opened:
+            assert bytes(opened.view()) == bytes(vault_key.view())
+    assert len(given) == 4 and all(len(material) == 32 for material in given)
+    assert given[1] == given[3] == bytes(32) and given[0] == given[2] != bytes(32)
+    for material in given[::2]:
+        assert material != password and material not in password
+        # A password of a few bytes can turn up in 32 pseudorandom ones by chance: 16 bytes cannot.
+        assert len(password) < 16 or all(password[at : at + 16] not in material for at in range(len(password) - 15))

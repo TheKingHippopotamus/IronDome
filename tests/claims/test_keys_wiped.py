@@ -35,6 +35,7 @@ prove nothing.
 from __future__ import annotations
 
 import os
+import platform
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -51,6 +52,7 @@ pytestmark = pytest.mark.skipif(not memscan.supported()[0], reason=memscan.suppo
 #: What the statement names, as the probe labels it. Every one must be looked for, and found nowhere.
 NAMED_KEYS = (
     "master password",
+    "prehash of the master password",
     "Argon2id output",
     "device secret",
     "device key",
@@ -167,24 +169,42 @@ def test_a_key_dropped_as_bytes_without_wiping_is_still_found(probes):
     assert len(dropped) == 1 and dropped[0]["hits"]
 
 
-def test_the_probe_judged_by_irondome_verify_passes(probes, derivation):
-    result = selftest.evaluate_keys_probe(probes["clean"], probes["control"], probes.get("unzeroed"), derivation)
+def test_the_probe_judged_by_irondome_verify_passes(probes, derivation, tmp_path):
+    long_derivation = selftest.long_password_probe(tmp_path)
+    result = selftest.evaluate_keys_probe(
+        probes["clean"], probes["control"], probes.get("unzeroed"), derivation, long_derivation
+    )
     assert result.status == selftest.PASS, result.detail
+    assert "no part of a master password of 2000 bytes (79 pieces looked for)" in result.detail
+
+
+def test_irondome_verify_fails_when_a_part_of_a_long_master_password_is_left(probes, derivation, tmp_path):
+    long_derivation = selftest.long_password_probe(tmp_path, length=700)
+    last = "master password, bytes 684 to 700"
+    part = next(needle for needle in long_derivation["needles"] if needle["label"] == last)
+    part["hits"] = [{"address": 0x1000, "where": "[heap]"}]
+    result = selftest.evaluate_keys_probe(
+        probes["clean"], probes["control"], probes.get("unzeroed"), derivation, long_derivation
+    )
+    assert result.status == selftest.FAIL
+    assert "over a master password of 700 bytes" in result.detail
+    assert "1 copy of the master password, bytes 684 to 700 ([heap])" in result.detail
 
 
 def test_a_non_ascii_master_password_leaves_no_copy_in_any_form(probes):
     document = probes["non-ascii"]
     forms = [label for label in labels(document) if label.startswith("master password")]
     assert "master password" in forms and "master password as stored in a str" in forms
-    assert "master password as fed to Argon2id" in forms
+    assert "master password as normalised" in forms
     assert leftovers(document) == []
 
 
-#: The copy the boundary names, as the probe labels it. Argon2id in pyca/cryptography (OpenSSL) copies the
-#: password it is given into system-malloc memory and frees it without overwriting it. For an ASCII password
-#: both labels are the same bytes. (HKDF leaves a copy of the key it derives too, on the C stack and in memory
-#: it frees: IronDome derives again from zeros, which overwrites it, so that copy is not on this list.)
-ARGON2_INPUT = ("master password", "master password as fed to Argon2id")
+#: The copy the boundary names, as the probe labels it. Argon2id in pyca/cryptography (OpenSSL) copies what
+#: it is given into system-malloc memory and frees it without overwriting it. What it is given is the 32-byte
+#: prehash IronDome makes of the master password, never the password: no form of the password is on this
+#: list. (HKDF leaves a copy of the key it derives too, on the C stack and in memory it frees: IronDome
+#: derives again from zeros, which overwrites it, so that copy is not on this list.)
+ARGON2_INPUT = ("prehash of the master password",)
 
 
 def found_labels(document: Dict[str, Any]) -> List[str]:
@@ -200,14 +220,15 @@ def assert_argon2_input_copies_are_in_system_malloc(document: Dict[str, Any]) ->
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="on Linux the allocator never zeroes what is freed")
-def test_boundary_on_macos_without_zero_on_free_only_the_copy_argon2id_makes_of_the_password_can_be_left(probes):
+def test_boundary_on_macos_without_zero_on_free_only_the_copy_argon2id_makes_of_the_prehash_can_be_left(probes):
     """With ``MallocZeroOnFree=0`` macOS behaves like glibc: a block freed without wiping keeps its bytes.
 
-    Then the scan after the vault is locked may find the master password, in
-    the copy Argon2id makes of it inside pyca/cryptography (OpenSSL) and frees
-    without overwriting, and nothing else. Whether that block is still unused
-    when the scan runs is up to the allocator, so this asserts what may be
-    found and where, never that a copy is found.
+    Then the scan after the vault is locked may find the prehash of the
+    master password, in the copy Argon2id makes of it inside
+    pyca/cryptography (OpenSSL) and frees without overwriting, and nothing
+    else: no form of the master password itself. Whether that block is still
+    unused when the scan runs is up to the allocator, so this asserts what
+    may be found and where, never that a copy is found.
     """
     document = probes["unzeroed"]
     dropped = [needle for needle in document["needles"] if needle["kind"] == "control-dropped"]
@@ -220,10 +241,10 @@ def test_boundary_on_macos_without_zero_on_free_only_the_copy_argon2id_makes_of_
 def derivation(tmp_path_factory: pytest.TempPathFactory) -> Dict[str, Any]:
     """The first half of the statement, where the keys are made: IronDome's copies exist only in locked memory.
 
-    The ``kdf`` probe normalises the master password, stretches it with
-    Argon2id and expands that with HKDF, twice, as an unlock does, and
-    searches its writable memory at once, leaving out only the four live
-    buffers: whatever the derivation itself copied anywhere else is still there
+    The ``kdf`` probe normalises the master password, makes its prehash with
+    HKDF, stretches that with Argon2id and expands the result with HKDF,
+    twice, as an unlock does, and searches its writable memory at once,
+    leaving out only the five live buffers: whatever the derivation itself copied anywhere else is still there
     to be found, before later work happens to reuse the block. On macOS it runs
     with ``MallocZeroOnFree=0``, as glibc behaves.
     """
@@ -238,23 +259,73 @@ def leftovers_of(document: Dict[str, Any], *names: str) -> List[str]:
 
 def test_the_derivation_probe_recorded_every_form_and_saw_its_control(derivation):
     found = set(labels(derivation))
-    assert {"master password", "master password as fed to Argon2id", "Argon2id output", "HKDF output"} <= found
+    assert {"master password", "master password as normalised", "Argon2id output", "HKDF output"} <= found
+    assert "prehash of the master password" in found
     assert "key HKDF extracts" in found
     assert "master password as stored in a str" in found
     dropped = [needle for needle in derivation["needles"] if needle["kind"] == "control-dropped"]
     assert len(dropped) == 1 and dropped[0]["hits"]
 
 
-def test_boundary_right_after_a_derivation_the_only_copy_is_the_one_argon2id_makes_of_the_password(derivation):
-    """Searched at once, with freed memory unzeroed: what Argon2id copies inside pyca/cryptography is there.
+def test_boundary_right_after_a_derivation_the_only_copy_is_the_one_argon2id_makes_of_the_prehash(derivation):
+    """Searched at once, with freed memory unzeroed: what Argon2id copies inside pyca/cryptography may be there.
 
-    Argon2id's copy of the password it was fed, in system-malloc memory. No
-    copy of the Argon2id output, of the HKDF output, of the password as typed,
-    or of any form IronDome itself makes. Whether a run finds the named copy
-    is up to the allocator, so this asserts only what may be found, and where.
+    Argon2id's copy of the 32-byte prehash it was fed, in system-malloc
+    memory. No copy of the master password, as typed or as normalised, of the
+    Argon2id output, of the HKDF output, or of any form IronDome itself makes.
+    Whether a run finds the named copy is up to the allocator, so this asserts
+    only what may be found, and where.
     """
     assert [label for label in found_labels(derivation) if label not in ARGON2_INPUT] == []
     assert_argon2_input_copies_are_in_system_malloc(derivation)
+
+
+@pytest.mark.parametrize("length", [660, 700, 2000, 4000])
+def test_no_part_of_a_long_master_password_is_left_right_after_a_derivation(length, tmp_path):
+    """Argon2id is never given the master password, so the copy it makes is never of the password.
+
+    When it was, the copy of a password longer than about 650 bytes was in a
+    block the allocator did not hand back to be overwritten, and the last 100
+    to 180 bytes of it were found left. Now Argon2id is given the 32-byte
+    prehash. The password itself goes only through HKDF, which reads it a
+    block at a time: searched for piece by piece right after the first
+    derivation the process makes, with freed memory unzeroed, nothing of it
+    is found outside the two locked buffers that hold it. The pieces are 16
+    bytes over the last 512, where the copy used to be left, and 32 or 64
+    before that. (The test below is the control: the same search, with
+    Argon2id given the password.)
+    """
+    document = selftest.long_password_probe(tmp_path, length=length)
+    pieces = [needle for needle in key_needles(document) if needle["label"].startswith("master password, bytes")]
+    assert sum(needle["length"] for needle in pieces) == length and all(needle["recorded"] for needle in pieces)
+    assert len(pieces) >= length // 64 and [needle["length"] for needle in pieces[-32:]] == [16] * 32
+    assert [label for label in found_labels(document) if label not in ARGON2_INPUT] == []
+    assert_argon2_input_copies_are_in_system_malloc(document)
+    dropped = [needle for needle in document["needles"] if needle["kind"] == "control-dropped"]
+    assert len(dropped) == 1 and dropped[0]["hits"]
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin" and platform.libc_ver()[0] != "glibc",
+    reason="what the library and the allocator leave behind is known for glibc and for macOS only",
+)
+def test_the_search_finds_the_copy_of_a_long_master_password_when_argon2id_is_given_the_password(tmp_path):
+    """The control of the search above: it does what IronDome must not, and the search finds what that leaves.
+
+    The ``kdf-control`` probe gives Argon2id the master password itself. With
+    glibc the end of the copy the library made is still there right after
+    the first derivation; on macOS with freed memory unzeroed, all of it.
+    Whether one run leaves it is up to the allocator, so the probe is run up
+    to five times: a search that never finds it would prove nothing about
+    the run that gives Argon2id the prehash.
+    """
+    found: List[str] = []
+    for attempt in range(5):
+        document = selftest.long_password_probe(tmp_path / str(attempt), length=2000, control=True)
+        found = [label for label in found_labels(document) if label.startswith("master password, bytes")]
+        if found:
+            break
+    assert found, "the search missed the copy Argon2id makes of a password it is given, so it proves nothing"
 
 
 def test_the_copy_hkdf_leaves_of_a_derived_key_is_overwritten_by_deriving_again_from_zeros(derivation):
@@ -326,7 +397,7 @@ def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_writ
 
 
 def test_normalising_a_non_ascii_password_leaves_no_str_copy_of_it(derivation):
-    stored = ("master password as stored in a str", "master password as fed to Argon2id as stored in a str")
+    stored = ("master password as stored in a str", "master password as normalised as stored in a str")
     assert leftovers_of(derivation, *stored) == []
 
 

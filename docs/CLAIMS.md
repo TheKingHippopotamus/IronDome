@@ -15,10 +15,10 @@ Run the checks on your own machine with `irondome verify` (`irondome verify --cl
 | [`biometric-enforced-by-chip`](#biometric-enforced-by-chip) | Touch ID is enforced by the Secure Enclave, not by IronDome | macOS | 12 | `biometric_enforced` |
 | [`tpm-rate-limit`](#tpm-rate-limit) | On Linux the TPM checks the password and rate-limits guesses | Linux | 8 | test suite only |
 | [`crypto-erase`](#crypto-erase) | nuke makes every copy of the vault unreadable | macOS, Linux | 13 | `crypto_erase` |
-| [`keys-wiped`](#keys-wiped) | Key material is wiped from memory | macOS, Linux | 29 | `keys_wiped` |
+| [`keys-wiped`](#keys-wiped) | Key material is wiped from memory | macOS, Linux | 34 | `keys_wiped` |
 | [`everything-encrypted`](#everything-encrypted) | Names, usernames, URLs and tags are encrypted, not just passwords | macOS, Linux | 7 | `everything_encrypted` |
 | [`tamper-evident`](#tamper-evident) | Altered, swapped or rolled-back records are rejected | macOS, Linux | 10 | `tamper_evident` |
-| [`modern-crypto`](#modern-crypto) | Argon2id and AES-256-GCM, from one widely used library | macOS, Linux | 19 | `modern_crypto` |
+| [`modern-crypto`](#modern-crypto) | Argon2id and AES-256-GCM, from one widely used library | macOS, Linux | 20 | `modern_crypto` |
 | [`no-network`](#no-network) | IronDome cannot make a network connection | macOS, Linux | 9 | `no_network` |
 | [`one-dependency`](#one-dependency) | One direct dependency | macOS, Linux | 6 | `one_dependency` |
 | [`owner-only-files`](#owner-only-files) | Every file is owner-only and every write is atomic | macOS, Linux | 9 | `owner_only_files` |
@@ -177,15 +177,15 @@ Tests (13):
 
 **Key material is wiped from memory**
 
-IronDome keeps its copies of the master password, the Argon2id output, the device secret, the key-encryption key, the vault key and every subkey only in memory outside the Python heap, locked into RAM where the system allows it, and overwrites them when the vault is locked; Argon2id and HKDF write their output straight into those buffers, and each derivation is run a second time on zeros (HKDF with an all-zero key, Argon2id at its lowest cost with an all-zero password of the same length), so that what the library leaves behind of the first run is overwritten by the second. After a full session, a scan of the process's entire address space finds no copy of any of them.
+IronDome keeps its copies of the master password, the prehash it derives from it, the Argon2id output, the device secret, the key-encryption key, the vault key and every subkey only in memory outside the Python heap, locked into RAM where the system allows it, and overwrites them when the vault is locked. Argon2id is never given the master password: IronDome first derives 32 bytes from it with HKDF-SHA256, the prehash, and Argon2id stretches those. Argon2id and HKDF write their output straight into IronDome's buffers, and each derivation is run a second time on zeros (HKDF with an all-zero key, Argon2id at its lowest cost with an all-zero input of the same length), so that what the library leaves behind of the first run is overwritten by the second. After a full session, a scan of the process's entire address space finds no copy of any of them; right after the first derivation a process makes, a search finds no part of an ASCII master password of up to 4,000 bytes.
 
-*Where it stops:* pyca/cryptography and the OpenSSL it bundles copy the master password given to Argon2id into memory they free without overwriting. IronDome cannot prevent that copy and does not write to the library's memory itself; it runs Argon2id a second time on zeros, and the library, asking for blocks of the same sizes, is handed the ones it just freed and overwrites the copy. That is the allocator's choice, not a guarantee. On Linux with glibc the tests find no copy left, and a review before release found none for passwords of 8 to 640 bytes; the copy of a longer password is in a block too large to be handed back that way, and the last 100 to 180 bytes of it were found left after the first derivation in a process. macOS zeroes small freed blocks by default anyway; with that zeroing turned off (MallocZeroOnFree=0) the scan can still find the copy. Where the copy is left, it lasts until that memory is reused. HKDF leaves its working keys behind, the intermediate key it extracts and the key it derives, on the C stack and in memory it frees; IronDome cannot wipe those either, and overwrites them by deriving again from zeros. That rests on the library taking the same path through its code both times, which the tests check on every supported Python and IronDome does not control. A non-ASCII master password is normalised with Python's unicodedata, which frees its own working copies of the text, as 4-byte code points, without overwriting them; the two strings IronDome makes for it are zeroed in place on CPython. Decrypted entries are ordinary Python strings for as long as a command runs. Session and grant tokens are bearer secrets that live in your shell's environment by design. The recovery key is text you are shown once and may type back: as text it is an ordinary Python string, not locked memory, for as long as a command holds it. Locking the pages is best effort: where the system refuses it (a low RLIMIT_MEMLOCK, for one), the keys are still kept outside the Python heap and overwritten, but could be written to swap, and `irondome doctor` warns. A process with debugger rights over a running IronDome can read anything.
+*Where it stops:* pyca/cryptography and the OpenSSL it bundles copy what Argon2id is given into memory they free without overwriting. Argon2id is given the prehash, so the copy is of the prehash. By itself the prehash opens nothing but this one keyslot: with the vault file and the device it opens the vault as the password would, and for a portable backup written by `irondome export`, whose keyslot has no device secret, the backup file alone is enough. Whoever reads it and knows the keyslot's salt, which is in the vault file, can also test guesses of the master password against it at the speed of SHA-256, with no device and no TPM counting wrong guesses; a password found that way opens whatever that password protects. IronDome cannot prevent that copy and does not write to the library's memory itself; it runs Argon2id a second time on zeros, and the library, asking for blocks of the same sizes, is handed the ones it just freed and overwrites the copy. That is the allocator's choice, not a guarantee. On Linux with glibc the tests find no copy left. macOS zeroes small freed blocks by default; with that zeroing turned off (MallocZeroOnFree=0) its allocator does not hand the block straight back, and the scan usually finds the copy of the prehash. Where the copy is left, it lasts until that memory is reused. The master password itself is given only to HKDF, which reads it a block at a time. For an ASCII password of up to 4,000 bytes the tests find no copy of it afterwards, whole or in part. They search for it in pieces: 16 bytes over its last 512, 32 or 64 before that, so a copy shorter than two pieces can be missed; a review before release searched for any 8 bytes of it, through `init`, unlocking, a wrong password and `export`, and found none. The tests' control gives Argon2id the password, as IronDome did before this was changed, and the same search then finds the end of a long password on Linux and, in most runs, all of it on macOS with zeroing off. The control is part of the test suite, not of `irondome verify`. That HKDF leaves no copy of its input is how this version of the library works, measured on Linux with glibc and on macOS, both on arm64; IronDome does not control it. `irondome migrate` has to give the password of a 3.x vault to that format's own PBKDF2; the review found no copy left there on Linux. HKDF leaves its working keys behind, the intermediate key it extracts and the key it derives, on the C stack and in memory it frees; IronDome cannot wipe those either, and overwrites them by deriving again from zeros. That rests on the library taking the same path through its code both times, which the tests check on every supported Python and IronDome does not control. A non-ASCII master password is normalised with Python's unicodedata before any of this, and unicodedata frees its own working copies of the text, as 4-byte code points, without overwriting them: the review found three copies of nearly all of a 3,600-byte one on Linux with Python 3.13, and none with 3.9; the two strings IronDome makes for it are zeroed in place on CPython. Decrypted entries are ordinary Python strings for as long as a command runs. Session and grant tokens are bearer secrets that live in your shell's environment by design. The recovery key is text you are shown once and may type back: as text it is an ordinary Python string, not locked memory, for as long as a command holds it. Locking the pages is best effort: where the system refuses it (a low RLIMIT_MEMLOCK, for one), the keys are still kept outside the Python heap and overwritten, but could be written to swap, and `irondome doctor` warns. A process with debugger rights over a running IronDome can read anything.
 
 - Platforms: macOS, Linux
 - Closes L4: 3.x: the key was never zeroed in memory (immutable bytes inside a Fernet object).
 - On your machine: `irondome verify --claim keys-wiped` (check `keys_wiped`)
 
-Tests (29):
+Tests (34):
 
 - [`tests/claims/test_keys_wiped.py::test_no_key_is_left_anywhere_in_memory_after_the_vault_is_locked`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_every_key_the_statement_names_was_recorded_and_looked_for`](../tests/claims/test_keys_wiped.py)
@@ -196,6 +196,7 @@ Tests (29):
 - [`tests/claims/test_keys_wiped.py::test_the_real_vault_key_kept_as_bytes_by_the_control_run_is_found`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_a_key_dropped_as_bytes_without_wiping_is_still_found`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_the_probe_judged_by_irondome_verify_passes`](../tests/claims/test_keys_wiped.py)
+- [`tests/claims/test_keys_wiped.py::test_irondome_verify_fails_when_a_part_of_a_long_master_password_is_left`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_a_non_ascii_master_password_leaves_no_copy_in_any_form`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_the_derivation_probe_recorded_every_form_and_saw_its_control`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_normalising_a_non_ascii_password_leaves_no_str_copy_of_it`](../tests/claims/test_keys_wiped.py)
@@ -204,8 +205,10 @@ Tests (29):
 - [`tests/claims/test_keys_wiped.py::test_boundary_a_decrypted_entry_is_an_ordinary_string`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_boundary_session_and_grant_tokens_are_ordinary_strings`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_boundary_a_value_still_in_use_is_readable_in_memory`](../tests/claims/test_keys_wiped.py)
-- [`tests/claims/test_keys_wiped.py::test_boundary_on_macos_without_zero_on_free_only_the_copy_argon2id_makes_of_the_password_can_be_left`](../tests/claims/test_keys_wiped.py)
-- [`tests/claims/test_keys_wiped.py::test_boundary_right_after_a_derivation_the_only_copy_is_the_one_argon2id_makes_of_the_password`](../tests/claims/test_keys_wiped.py)
+- [`tests/claims/test_keys_wiped.py::test_boundary_on_macos_without_zero_on_free_only_the_copy_argon2id_makes_of_the_prehash_can_be_left`](../tests/claims/test_keys_wiped.py)
+- [`tests/claims/test_keys_wiped.py::test_boundary_right_after_a_derivation_the_only_copy_is_the_one_argon2id_makes_of_the_prehash`](../tests/claims/test_keys_wiped.py)
+- [`tests/claims/test_keys_wiped.py::test_no_part_of_a_long_master_password_is_left_right_after_a_derivation`](../tests/claims/test_keys_wiped.py)
+- [`tests/claims/test_keys_wiped.py::test_the_search_finds_the_copy_of_a_long_master_password_when_argon2id_is_given_the_password`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_the_copy_hkdf_leaves_of_a_derived_key_is_overwritten_by_deriving_again_from_zeros`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_write_straight_into_them`](../tests/claims/test_keys_wiped.py)
 - [`tests/claims/test_keys_wiped.py::test_the_probe_runs_in_a_fresh_interpreter_with_a_minimal_environment`](../tests/claims/test_keys_wiped.py)
@@ -216,6 +219,8 @@ Tests (29):
 - [`tests/unit/test_memscan.py::test_the_table_never_matches_itself`](../tests/unit/test_memscan.py)
 - [`tests/unit/test_secmem.py::test_dropping_the_last_reference_wipes`](../tests/unit/test_secmem.py)
 - [`tests/unit/test_secmem.py::test_read_secret_from_fd_returns_exactly_sized_locked_memory`](../tests/unit/test_secmem.py)
+- [`tests/unit/test_keys.py::test_argon2id_is_never_given_the_master_password`](../tests/unit/test_keys.py)
+- [`tests/unit/test_keys.py::test_the_password_factor_is_argon2id_over_an_hkdf_prehash_of_the_password`](../tests/unit/test_keys.py)
 
 ## everything-encrypted
 
@@ -266,7 +271,7 @@ Tests (10):
 
 **Argon2id and AES-256-GCM, from one widely used library**
 
-Master passwords are stretched with Argon2id (by default 256 MiB, 3 passes and 4 lanes, and 64 MiB, RFC 9106's low-memory choice, on a machine with less than 3 GiB of RAM; never below the OWASP minimum), keys are derived with HKDF-SHA256 and data is encrypted with AES-256-GCM using random 96-bit nonces. IronDome implements no primitive itself; all of them come from pyca/cryptography and are checked against published test vectors.
+Master passwords are stretched with Argon2id (by default 256 MiB, 3 passes and 4 lanes, and 64 MiB, RFC 9106's low-memory choice, on a machine with less than 3 GiB of RAM; never below the OWASP minimum), applied to a 32-byte HKDF-SHA256 prehash of the password and never to the password itself, keys are derived with HKDF-SHA256 and data is encrypted with AES-256-GCM using random 96-bit nonces. IronDome implements no primitive itself; all of them come from pyca/cryptography and are checked against published test vectors.
 
 *Where it stops:* No independent party has audited IronDome's use of these primitives. IRONDOME_KDF_MEMORY_MIB in the environment, or --kdf-memory-mib when a vault is made, replaces the default memory cost with any value from 19 MiB to 4 GiB.
 
@@ -274,7 +279,7 @@ Master passwords are stretched with Argon2id (by default 256 MiB, 3 passes and 4
 - Closes L5: 3.x: the cipher was AES-128-CBC (Fernet splits its 32-byte key into a 16-byte AES key and a 16-byte HMAC key).
 - On your machine: `irondome verify --claim modern-crypto` (check `modern_crypto`)
 
-Tests (19):
+Tests (20):
 
 - [`tests/claims/test_modern_crypto.py::test_hkdf_as_irondome_calls_it_matches_rfc_5869`](../tests/claims/test_modern_crypto.py)
 - [`tests/claims/test_modern_crypto.py::test_aes_256_gcm_as_irondome_calls_it_matches_the_gcm_specification`](../tests/claims/test_modern_crypto.py)
@@ -295,6 +300,7 @@ Tests (19):
 - [`tests/unit/test_crypto.py::test_open_sealed_matches_published_vectors`](../tests/unit/test_crypto.py)
 - [`tests/unit/test_crypto.py::test_the_library_implements_rfc_9106`](../tests/unit/test_crypto.py)
 - [`tests/unit/test_crypto.py::test_seal_writes_nonce_ciphertext_tag`](../tests/unit/test_crypto.py)
+- [`tests/unit/test_keys.py::test_the_password_factor_is_argon2id_over_an_hkdf_prehash_of_the_password`](../tests/unit/test_keys.py)
 
 ## no-network
 

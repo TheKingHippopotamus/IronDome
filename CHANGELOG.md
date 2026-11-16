@@ -50,10 +50,14 @@ Each is now a claim in `docs/CLAIMS.md` with the tests that hold it, and
   overwritten when the vault locks. A test scans the whole address space of
   the process on macOS and Linux after a full session and requires zero hits.
   One copy is made outside IronDome's reach: Argon2id in `cryptography`
-  (OpenSSL) copies the master password into memory it frees without
-  overwriting. IronDome runs Argon2id a second time on zeros, so that the
-  library, handed the blocks it just freed, overwrites the copy itself; macOS
-  also zeroes small freed blocks. That is the allocator's choice, not a
+  (OpenSSL) copies what it is given into memory it frees without
+  overwriting. So Argon2id is never given the master password: IronDome
+  derives a 32-byte prehash from it with HKDF, in locked memory, and Argon2id
+  stretches that. Searched for piece by piece right after a derivation, no
+  part of an ASCII master password of up to 4,000 bytes is found. The copy that is
+  left is of the prehash, and IronDome runs Argon2id a second time on zeros,
+  so that the library, handed the blocks it just freed, overwrites it itself;
+  macOS also zeroes small freed blocks. That is the allocator's choice, not a
   guarantee, and the claim's boundary says so. HKDF leaves its working keys, the one
   it extracts and the one it derives, on the C stack and in freed memory:
   IronDome derives again from zeros to overwrite them, and a scan made right
@@ -188,8 +192,9 @@ The new architecture removes all of them:
 ### Still true
 
 No independent audit. Decrypted entries are ordinary Python strings while a
-command runs. Argon2id inside `cryptography` leaves a copy of the master
-password, which IronDome gets overwritten by deriving again from zeros, best effort. Intel Macs are untested, and installing
+command runs. Argon2id inside `cryptography` leaves a copy of what it is
+given: that is a prehash of the master password, never the password, and
+IronDome gets the copy overwritten by deriving again from zeros, best effort. Intel Macs are untested, and installing
 there builds `cryptography` from source. A recovery key, and a portable backup made with
 `irondome export`, outlive `nuke`. Whole-file rollback is not detected. A
 grant's use count and a revoke rest on deleting its file, so a copy of the

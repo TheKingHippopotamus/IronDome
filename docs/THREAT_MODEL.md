@@ -12,7 +12,7 @@ which ones only the test suite checks.
 | Your secrets: passwords, API keys, TOTP seeds, notes | Encrypted records in `~/.irondome/bunkers/<name>/vault.irondome`, one vault per bunker (the first is `alpha`) |
 | The **vault key** (256-bit, random) that encrypts them | Never stored. Wrapped in *keyslots* inside the vault file |
 | The **device secret** that every password/biometric keyslot needs | Secure Enclave (macOS), TPM 2.0 NV storage (Linux), or a file in the device directory where there is no chip |
-| Your **master password** | Nowhere. It is stretched with Argon2id and discarded |
+| Your **master password** | Nowhere. A 32-byte prehash of it is stretched with Argon2id, and both are discarded |
 | The **recovery key** | Shown once at setup. On paper, with you |
 
 ## Adversaries and what they get
@@ -28,7 +28,7 @@ the vault was created and how often it has been written, and how it opens
 (keyslot kinds, backend, Argon2id cost).
 
 They **cannot guess your master password**, however weak, because the
-key-encryption key is derived from Argon2id(password) **and** the device
+key-encryption key is derived from the Argon2id-stretched password **and** the device
 secret, and the device secret is not in the file. There is nothing to test a
 guess against. This holds on every backend, including the file-based one, as
 long as the device directory was not copied along with the vault.
@@ -71,8 +71,9 @@ two parts.
 **While a command is running:** IronDome keeps the window small. IronDome
 holds key material only in memory outside the Python heap, locked into RAM
 where the system allows it, and wipes it when the command
-finishes (the copy `cryptography` makes of the master password inside Argon2id
-is overwritten afterwards, best effort: see the limits below). IronDome
+finishes (Argon2id inside `cryptography` copies what it is given, which is a
+prehash and never the master password; that copy is overwritten afterwards,
+best effort: see the limits below). IronDome
 turns off core dumps for itself, and on Linux marks itself non-dumpable so
 other processes of the same user cannot attach to it or read its memory
 (claim [`process-hardened`](CLAIMS.md#process-hardened); `IRONDOME_DEBUG=1`
@@ -176,14 +177,25 @@ with the old key and shows what it held then.
 * **Decrypted entries are ordinary Python strings** for as long as a command
   runs. Only IronDome's own copies of *key material* stay in locked, wiped
   memory.
-* **Copies made inside `cryptography`.** Argon2id copies the master password
-  it is given into memory it frees without overwriting. IronDome cannot
-  prevent that copy and does not write to the library's memory itself: it
-  runs Argon2id a second time on zeros, and the library, asking for blocks of
-  the same sizes, is handed the ones it just freed and overwrites the copy.
-  That is the allocator's choice, not a guarantee (the tests find no copy
-  left on Linux with glibc, and macOS zeroes small freed blocks by default),
-  and a copy that is left lasts until that memory is reused. HKDF leaves its working keys, the one it extracts
+* **Copies made inside `cryptography`.** Argon2id copies what it is given
+  into memory it frees without overwriting. So IronDome never gives it the
+  master password: it derives a 32-byte prehash from the password with HKDF
+  and Argon2id stretches that. The copy is then of the prehash. By itself the
+  prehash opens nothing but that one keyslot (with the vault file and the
+  device; a portable backup file alone, since its keyslot has no device
+  secret). Whoever reads it and has the keyslot's salt from the vault file
+  can also test guesses of the password against it at the speed of SHA-256,
+  with no device and no TPM counting wrong guesses, and a password found
+  that way opens whatever it protects. IronDome cannot prevent that copy and does not
+  write to the library's memory itself: it runs Argon2id a second time on
+  zeros, and the library, asking for blocks of the same sizes, is handed the
+  ones it just freed and overwrites the copy. That is the allocator's
+  choice, not a guarantee: the tests find no copy left on Linux with glibc;
+  macOS zeroes small freed blocks by default, and with that zeroing turned
+  off its allocator does not hand the block back and the copy of the prehash
+  is usually found. A copy that is left lasts until that memory is reused.
+  Of an ASCII master password itself the tests find nothing after a
+  derivation, whole or in part, up to 4,000 bytes. HKDF leaves its working keys, the one it extracts
   and the one it derives, on the C stack and in freed memory; IronDome
   overwrites them by deriving again from zeros, which holds as long as the library takes
   the same path through its code both times (the tests check that it does).
@@ -236,6 +248,7 @@ with the old key and shows what it held then.
 | Purpose | Primitive | Parameters |
 | --- | --- | --- |
 | Password stretching | Argon2id (RFC 9106) | 256 MiB, t=3, p=4 by default (64 MiB, t=3, p=4 with less than 3 GiB of RAM); never below the OWASP minimum (19 MiB with t=2, or 46 MiB with t=1); stored per keyslot |
+| Password prehash | HKDF-SHA256 (RFC 5869) | label `irondome/v4/password`, the keyslot's Argon2id salt; its 32 bytes are the only input Argon2id gets |
 | Key derivation | HKDF-SHA256 (RFC 5869) | one label per purpose; salt binds vault and slot |
 | Encryption | AES-256-GCM | random 96-bit nonce, 128-bit tag, context in associated data |
 | Device binding (macOS) | ECDH on P-256 inside the Secure Enclave | against a random point with no known discrete log |
