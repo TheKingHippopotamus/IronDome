@@ -164,12 +164,14 @@ resets the counter at once, for you and for anyone else who can use the TPM:
 
 **`.env.irondome` is read without asking.** `irondome run` takes it from the
 directory the command runs in and says which variables it found there, with
-`-q` as well. A file nobody named may only point variables at entries of
-the vault (`NAME=irondome://ENTRY`). If it sets anything as written, the
-command is refused until you name the file with `--env-file`: a variable
-set as written can choose what code runs (`PATH`, `LD_PRELOAD`, `LESSOPEN`,
-`MAKEFILES` and many more), and no list of those is complete. The
-file names what the command receives, so in a directory someone else wrote (a
+`-q` as well. A file nobody named may only ask for a secret under the name
+you gave it: `NAME=irondome://NAME`, where `NAME` is an alias or an entry,
+which is what `--env NAME` does. Anything else is refused until you name the
+file with `--env-file`: a variable set as written can choose what code runs
+(`PATH`, `LD_PRELOAD`, `LESSOPEN`, `MAKEFILES` and many more, and no list of
+those is complete), and so can one pointed at a field whose content the
+file's author can guess (`PATH=irondome://github/username`). The
+file still names what the command receives, so in a directory someone else wrote (a
 cloned repository), read it before you run anything through `irondome run`
 with your master password or a session; a grant gives the command only what
 the grant covers.

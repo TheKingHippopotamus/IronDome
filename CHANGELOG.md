@@ -118,7 +118,8 @@ found, and what was done:
   below the default, and `init` remarks on a weak password.
 - Stated as limits, not changed: anything running as you can push a TPM into
   lockout with wrong passwords; `.env.irondome` in the working directory is
-  read without asking (the variables it supplies are now listed).
+  read without asking (the variables it supplies are now listed; what such
+  a file may hold was narrowed later, below).
 
 ### Found by a second person, using the build with those fixes
 
@@ -134,11 +135,14 @@ lockout. What that pass found, and what was done:
 - **`--value-stdin` kept the first line of a key of several lines and said
   `ok`.** A value that is piped in and is the last thing on stdin is now
   read to the end of input, up to 64 KiB: several lines exactly as they
-  came, one line without the line breaks after it. With stdin a terminal
-  the value is typed at a hidden prompt.
+  came, one line without the line breaks after it; a value of nothing but
+  line breaks is refused. With stdin a terminal, whatever a command would
+  read from it (`--password-stdin`, `--value-stdin`, `--totp-stdin`, the
+  value of a `--field`) is typed at a hidden prompt, and `--note-stdin`
+  says that the notes are shown and how to finish them.
 - **Masking still passed ordinary encodings**: bash's `printf %q`, JSON as
   Go and PHP write it, CSV quoting, a value percent-encoded twice, hex with
-  a separator between the bytes. These are masked now; the claim lists what
+  a colon, a hyphen or a space between the bytes. These are masked now; the claim lists what
   is masked form by form, and what is not.
 - **A re-key killed at its last step left a whole vault in a temporary
   file**, which opened with the recovery key that run had printed. The next
@@ -147,10 +151,12 @@ lockout. What that pass found, and what was done:
   says the log cannot be checked until the re-key is finished, and how.
 - **`.env.irondome` could set `PATH`, and `-q` hid the notice about the
   file.** The notice is printed with `-q` too. A file nobody named may now
-  only point variables at entries of the vault; one that sets anything as
-  written is refused until it is named with `--env-file`. (A first fix
-  refused a list of dangerous names; the reviewer got a secret out through
-  `LESSOPEN`, which was not on it.)
+  only ask for a secret under the name its owner gave it
+  (`NAME=irondome://NAME`, as `--env NAME` does); anything else is refused
+  until the file is named with `--env-file`. (A first fix refused a list of
+  dangerous names, and the reviewer got a secret out through `LESSOPEN`,
+  which was not on it. A second allowed any reference, and the reviewer
+  pointed `PATH` at a user name they could guess.)
 - **A grant made under a session outlived `irondome lock`.** Ending a
   session now revokes the grants made under it, and a label may not
   imitate the mark that ties a grant to its session.
@@ -168,9 +174,9 @@ lockout. What that pass found, and what was done:
   does not revoke grants; a scripted `init` writes the recovery key to
   stdout.
 
-The same reviewer then checked that build by hand: every item above held,
-and four smaller faults in the fixes themselves were found and are fixed
-in the entries above.
+The same reviewer then checked that build by hand, twice: every item above
+held, and each time smaller faults in the fixes themselves were found (four,
+then three). They are fixed in the entries above.
 
 ### Added
 

@@ -250,7 +250,8 @@ def _prompt_text(ctx: Context, prompt: str, what: str, alternative: str) -> str:
 def _skip_password_line(ctx: Context) -> None:
     """With --password-stdin the first line is the master password, even when a session opened the vault."""
     if ctx.password_stdin and ctx.unlocked_by == "session":
-        unused = read_secret_from_fd(0, allow_empty=True)
+        # From stdin, or at a hidden prompt when stdin is this terminal: either way the line is not the value.
+        unused = ctx.read_secret("Master password (a session is open, so it is not checked): ", allow_empty=True)
         if unused is not None:
             unused.wipe()
 
@@ -1098,11 +1099,11 @@ def _read_value(
     if source == "--words":
         bits = generator.passphrase_entropy_bits(args.words)
         return generator.generate_passphrase(args.words), f"a {args.words}-word passphrase ({bits:.0f} bits)"
-    if source == "--value-stdin" and os.isatty(0):
+    if source == "--value-stdin" and ctx.typed_stdin:
         # Typed, not piped: a line read from the terminal would be echoed, so it is asked for as any typed value.
         ctx.out.info(
             "stdin is this terminal, so the value is typed at a hidden prompt, one line. For a value of several "
-            f"lines, pipe it in: irondome {args.command} {_safe(name)} --value-stdin < FILE"
+            "lines, give this command the file on stdin instead: ... --value-stdin < FILE"
         )
         return _prompt_text(ctx, f"Value for {_safe(name)}: ", "the value", "--value-stdin"), None
     if source == "--value-stdin":
@@ -1134,14 +1135,17 @@ def _stdin_value(args: argparse.Namespace) -> str:
     finally:
         wipe_bytes(data)
     body = text.rstrip("\r\n")  # `echo token`, or a file whose last lines are blank: still one line
+    if not body:
+        # `echo "$TOKEN"` with TOKEN unset: saying ok would empty the value that was there.
+        raise UsageError(f"{what} cannot be empty: stdin held only line breaks")
     return text if "\n" in body else body
 
 
 def _read_totp(ctx: Context, source: Optional[str]) -> Optional[Dict[str, Any]]:
     what = "the one-time-password secret"
-    if source == "--totp-stdin":
+    if source == "--totp-stdin" and not ctx.typed_stdin:
         text = _stdin_text(what)
-    elif source == "--totp":
+    elif source in ("--totp", "--totp-stdin"):
         text = _prompt_text(ctx, "One-time-password secret (base32, or an otpauth:// link): ", what, "--totp-stdin")
     else:
         return None
@@ -1185,7 +1189,7 @@ _FIELDS_ON_STDIN = "--password-stdin (stdin then holds the master password, then
 def _read_fields(ctx: Context, args: argparse.Namespace, names: Sequence[str]) -> Dict[str, str]:
     """The value of each named custom field: one stdin line each, in order, or a hidden prompt each."""
     values: Dict[str, str] = {}
-    from_stdin = _stdin_carries_input(ctx, args)
+    from_stdin = _stdin_carries_input(ctx, args) and not ctx.typed_stdin
     for name in names:
         what = f"the value of the field {name}"
         if from_stdin:
@@ -1239,9 +1243,15 @@ def _check_note_source(args: argparse.Namespace) -> None:
         raise UsageError("the notes come from one place: choose --note or --note-stdin")
 
 
-def _read_note(args: argparse.Namespace) -> Optional[str]:
+def _read_note(ctx: Context, args: argparse.Namespace) -> Optional[str]:
     """The notes from --note, or from the rest of stdin (--note-stdin): read last, after every other line."""
     if args.note_stdin:
+        if ctx.typed_stdin:
+            # Several lines cannot be typed unseen, and a command that waits without a word looks hung.
+            ctx.out.notice(
+                "Type the notes: they are shown as you type. Finish with Ctrl-D on a line of its own. "
+                "(To keep them off the screen, give this command a file on stdin: ... --note-stdin < FILE)"
+            )
         return _stdin_rest("the notes")
     return args.note
 
@@ -1286,7 +1296,7 @@ def _add(ctx: Context, args: argparse.Namespace) -> int:
         value, generated = _read_value(ctx, args, source, name, settings)
         totp = _read_totp(ctx, totp_source)
         fields = _read_fields(ctx, args, field_names)
-        notes = _read_note(args) or ""
+        notes = _read_note(ctx, args) or ""
         entry = vault.add(
             name,
             Secret(password=value, totp=totp, notes=notes, fields=fields),
@@ -1638,7 +1648,7 @@ def _edit(ctx: Context, args: argparse.Namespace) -> int:
             new_fields.update(_read_fields(ctx, args, field_names))
             if field_names or removed:
                 changed.append("fields")
-            note = _read_note(args)
+            note = _read_note(ctx, args)
             if note is not None:
                 changed.append("notes")
             notes = note if note is not None else current.notes
@@ -2674,7 +2684,8 @@ def _add_entry_options(parser: argparse.ArgumentParser, *, editing: bool) -> Non
     )
     group.add_argument(
         "--note-stdin", action="store_true",
-        help="read the notes from the rest of stdin, after every other line, so they can run over several lines",
+        help="read the notes from the rest of stdin, after every other line, so they can run over several lines "
+        "(typed at a terminal they are shown; finish with Ctrl-D)",
     )
     group.add_argument(
         "--kind", choices=_KINDS, default=None if editing else "login", help="login (default) or secret (an API key)"
@@ -2706,8 +2717,9 @@ def _add_value_options(parser: argparse.ArgumentParser, *, editing: bool) -> Non
     group.add_argument("--words", type=int, metavar="N", help="generate a passphrase of N words instead")
     group.add_argument(
         "--value-stdin", action="store_true",
-        help="read the value from stdin: piped in and last there, all of it, several lines included; one line "
-        "when --totp-stdin, --field or --note-stdin follow; typed at a hidden prompt when stdin is a terminal",
+        help="read the value from stdin: piped in and last there, all of it (several lines exactly, one line "
+        "without the line breaks after it); one line when --totp-stdin, --field or --note-stdin follow; typed at "
+        "a hidden prompt when stdin is a terminal; never empty",
     )
     if editing:
         group.add_argument("--prompt-value", action="store_true", help="type the new value at a hidden prompt")
@@ -2717,7 +2729,10 @@ def _add_value_options(parser: argparse.ArgumentParser, *, editing: bool) -> Non
     totp.add_argument(
         "--totp", action="store_true", help="type a TOTP secret (base32 or otpauth://) at a hidden prompt"
     )
-    totp.add_argument("--totp-stdin", action="store_true", help="read the TOTP secret from the next line of stdin")
+    totp.add_argument(
+        "--totp-stdin", action="store_true",
+        help="read the TOTP secret from the next line of stdin (a hidden prompt when stdin is a terminal)",
+    )
     if editing:
         totp.add_argument("--no-totp", action="store_true", help="remove the TOTP secret")
 

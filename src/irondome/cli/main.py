@@ -231,7 +231,7 @@ def _common_options() -> argparse.ArgumentParser:
         "--password-stdin",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="read the master password from the first line of stdin",
+        help="read the master password from the first line of stdin (typed at a terminal, it is asked for unseen)",
     )
     group.add_argument(
         "--touch",

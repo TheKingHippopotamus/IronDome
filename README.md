@@ -102,16 +102,21 @@ $ irondome status                        # which chip protects the vault, keyslo
 Stop keeping secrets in `.env` files:
 
 ```console
+$ irondome alias set STRIPE_KEY stripe   # the name a program knows this secret by
+$ irondome alias set DATABASE_URL prod-db/url
 $ cat .env.irondome
-STRIPE_KEY=irondome://stripe
-DATABASE_URL=irondome://prod-db
+STRIPE_KEY=irondome://STRIPE_KEY
+DATABASE_URL=irondome://DATABASE_URL
 
 $ irondome run -- node server.js         # reads .env.irondome here, resolves each reference, starts the server
 ```
 
-The file holds references, not values: it names entries and opens none of
+The file holds references, not values: it names aliases and opens none of
 them, so an agent that reads it, or a repository it is committed to, learns
-entry names and nothing else.
+names and nothing else. A file that `irondome run` finds on its own may only
+ask for a secret under the name you gave it, as above; a file that does more
+(`DB=irondome://prod-db/url`, `DEBUG=1`) works when you name it with
+`--env-file`.
 
 ## Bunkers: several vaults on one machine
 
@@ -214,11 +219,12 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   a `--reveal` grant or an entry marked `--agent reveal` lets an agent see
   the value. `irondome run` reads `.env.irondome` in the directory it runs
   in without being asked and lists what the file supplies, with `-q` too.
-  Such a file may only point variables at entries of the vault; one that
-  sets anything as written (`PATH`, `LD_PRELOAD`, or just `DEBUG=1`) is
-  refused until you name it with `--env-file`. In a directory someone
-  else wrote, read that file first: it still decides which of your
-  secrets the command receives.
+  Such a file may only ask for a secret under the name you gave it
+  (`GITHUB_TOKEN=irondome://GITHUB_TOKEN`, as `--env GITHUB_TOKEN` does);
+  one that sets anything as written, or points a variable at some other
+  entry or field, is refused until you name it with `--env-file`. In a
+  directory someone else wrote, read that file first: it still decides
+  which of your named secrets the command receives.
 * **Grant and session tokens are bearer secrets.** Whoever holds one, and can
   read its file, has what it grants; a session token in an agent's
   environment is full access while the session lasts: it unwraps the vault

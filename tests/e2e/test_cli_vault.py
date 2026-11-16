@@ -2090,11 +2090,40 @@ def test_value_stdin_at_a_terminal_is_a_hidden_prompt_and_says_how_to_pipe_a_lon
     session = terminal("add", "typed", "--kind", "secret", "--value-stdin")
     session.secret("Master password: ", PASSWORD)
     session.expect("stdin is this terminal, so the value is typed at a hidden prompt, one line")
-    session.expect("irondome add typed --value-stdin < FILE")
+    session.expect("--value-stdin < FILE")
     session.secret("Value for typed: ", "typed-at-the-terminal-1")
     assert session.finish() == 0, session.output
     assert "typed-at-the-terminal-1" not in session.output
     assert get(cli, "typed") == "typed-at-the-terminal-1"
+
+
+def test_whatever_a_command_reads_from_stdin_is_asked_for_unseen_when_stdin_is_a_terminal(
+    cli: Run, vault: str, terminal: Callable[..., Terminal]
+) -> None:
+    """``--note-stdin`` at a terminal waited without a word and showed what was typed; so did its siblings.
+
+    A line read from a terminal is echoed. So the master password, the value, the one-time-password secret
+    and each field are typed at hidden prompts, in the order stdin would have held them; the notes, which
+    run over several lines, are typed in the open, and the command says so and how to finish.
+    """
+    session = terminal(
+        "--password-stdin", "add", "full", "--value-stdin", "--totp-stdin", "--field", "pin", "--note-stdin"
+    )
+    session.secret("Master password: ", PASSWORD)
+    session.secret("Value for full: ", "typed-value-22")
+    session.secret("One-time-password secret (base32, or an otpauth:// link): ", TOTP_SECRET)
+    session.secret("Value of the field pin: ", "4321-typed")
+    session.expect("Type the notes: they are shown as you type. Finish with Ctrl-D on a line of its own.")
+    session.send("first line of the notes")
+    session.send("second line")
+    os.write(session.fd, b"\x04")
+    assert session.finish() == 0, session.output
+    for hidden in (PASSWORD, "typed-value-22", TOTP_SECRET, "4321-typed"):
+        assert hidden not in session.output
+    assert get(cli, "full") == "typed-value-22"
+    assert get(cli, "full/pin") == "4321-typed"
+    assert get(cli, "full/notes") == "first line of the notes\nsecond line"
+    assert len(ok(owner(cli, "otp", "full")).stdout.strip()) == 6
 
 
 @needs_line_prompts

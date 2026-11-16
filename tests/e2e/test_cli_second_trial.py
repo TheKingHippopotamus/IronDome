@@ -63,9 +63,22 @@ def test_a_value_of_one_line_is_stored_without_its_line_break(cli: CLI) -> None:
     ok(cli("add", "blanks", "--kind", "secret", "--password-stdin", "--value-stdin",
            stdin=PASSWORD + "\ntok_blank\n\n\n"))  # a here-document or a file whose last lines are blank
     assert value_of(cli, "blanks") == "tok_blank"
-    ok(cli("add", "empty", "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\n\n"))
     nothing = cli("add", "none", "--kind", "secret", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\n")
     assert nothing.returncode != 0 and "expected the value on stdin, and found nothing" in nothing.stderr
+
+
+def test_a_value_of_nothing_but_line_breaks_is_refused_and_empties_nothing(cli: CLI) -> None:
+    """``echo "$TOKEN" | irondome edit k --value-stdin`` with TOKEN unset said ``ok`` and emptied the value."""
+    init(cli, "--no-recovery")
+    add(cli, "token", "the-value-that-is-there")
+    for breaks in ("\n", "\n\n\n", "\r\n"):
+        refused = fails(cli("edit", "token", "--password-stdin", "--value-stdin", stdin=PASSWORD + "\n" + breaks), 2)
+        assert "the value cannot be empty: stdin held only line breaks" in refused.stderr
+        added = fails(cli("add", "new", "--kind", "secret", "--password-stdin", "--value-stdin",
+                          stdin=PASSWORD + "\n" + breaks), 2)
+        assert "the value cannot be empty" in added.stderr
+    assert value_of(cli, "token") == "the-value-that-is-there"
+    assert "new" not in ok(cli("ls", "--password-stdin", stdin=PASSWORD + "\n")).stdout
 
 
 def test_a_value_followed_by_other_input_on_stdin_is_one_line_and_help_says_so(cli: CLI) -> None:
@@ -75,7 +88,7 @@ def test_a_value_followed_by_other_input_on_stdin_is_one_line_and_help_says_so(c
     assert value_of(cli, "bank") == "the-value"
     assert ok(cli("get", "bank/pin", "--password-stdin", stdin=PASSWORD + "\n")).stdout == "4321"
     said = ok(cli("add", "--help")).stdout
-    assert "several lines included" in " ".join(said.split())
+    assert "several lines exactly, one line without the line breaks after it" in " ".join(said.split())
     assert "a key of several lines is stored whole" in " ".join(said.split())
 
 
@@ -149,39 +162,59 @@ def test_the_notice_about_a_found_env_file_is_printed_with_quiet_too(cli: CLI, t
     init(cli, "--no-recovery")
     add(cli, "stripe", "the-stripe-value-1")
     (tmp_path / "repo").mkdir()
-    (tmp_path / "repo" / ".env.irondome").write_text("STRIPE_KEY=irondome://stripe\n")
+    ok(cli("alias", "set", "STRIPE_KEY", "stripe", "--password-stdin", stdin=PASSWORD + "\n"))
+    (tmp_path / "repo" / ".env.irondome").write_text("STRIPE_KEY=irondome://STRIPE_KEY\n")
     ran = ok(cli("-q", "run", "--cwd", str(tmp_path / "repo"), "--password-stdin", "--", "/usr/bin/true",
                  stdin=PASSWORD + "\n"))
-    assert "found in the working directory (from the vault: STRIPE_KEY)" in ran.stderr
+    assert "found in the working directory (from the vault, each under its own name: STRIPE_KEY)" in ran.stderr
 
 
-def test_a_found_env_file_may_only_name_entries_of_the_vault(cli: CLI, tmp_path) -> None:
+def test_a_found_env_file_may_only_ask_for_a_secret_under_its_own_name(cli: CLI, tmp_path) -> None:
     """A planted file set PATH, and ``irondome run -- make`` ran the planted ``make`` with the secret.
 
-    A first fix refused a list of such variables. The reviewer then got the secret out through LESSOPEN,
-    which was not on it, and named thirty more. No list of them is complete, so there is none: a file
-    nobody named may point variables at entries of the vault, and set nothing as written.
+    A first fix refused a list of such variables; the reviewer got the secret out through LESSOPEN, which
+    was not on it, and named thirty more. A second let the file point any variable at any entry; the
+    reviewer pointed PATH at a user name anybody could guess, and planted a directory of that name. So a
+    file nobody named may do one thing, the thing ``--env NAME`` does: ask for the secret the owner keeps
+    under that very name. What a variable is called and what goes into it are then both the owner's choice.
     """
     init(cli, "--no-recovery")
     add(cli, "stripe", "the-stripe-value-1")
+    ok(cli("add", "gh", "--username", "octo", "--url", "https://gh.example.test", "--password-stdin", "--value-stdin",
+           stdin=PASSWORD + "\nthe-gh-password-1\n"))
+    ok(cli("alias", "set", "STRIPE_KEY", "stripe", "--password-stdin", stdin=PASSWORD + "\n"))
     repo = tmp_path / "repo"
-    (repo / "bin").mkdir(parents=True)
     marker = tmp_path / "planted-ran"
-    (repo / "bin" / "make").write_text(f"#!/bin/sh\necho ran > '{marker}'\n")
-    (repo / "bin" / "make").chmod(0o755)
+    for directory in ("bin", "octo"):  # "octo": the directory PATH names once it holds gh's user name
+        (repo / directory).mkdir(parents=True)
+        (repo / directory / "make").write_text(f"#!/bin/sh\necho ran > '{marker}'\n")
+        (repo / directory / "make").chmod(0o755)
     for planted, named in (
         (f"PATH={repo}/bin:/usr/bin:/bin\nLD_PRELOAD=/tmp/x.so", "LD_PRELOAD, PATH"),
         ("LESSOPEN=|/tmp/repo/h.sh %s", "LESSOPEN"),
         ("LOG_LEVEL=debug", "LOG_LEVEL"),  # harmless, and refused all the same: the rule has no list
+        ("PATH=irondome://gh/username", "PATH"),  # a reference, and still the author's choice of what PATH holds
+        ("BASH_ENV=irondome://gh/url", "BASH_ENV"),
+        ("STRIPE=irondome://stripe", "STRIPE"),  # an entry under a name its owner did not give it
+        ("STRIPE_KEY2=irondome://STRIPE_KEY", "STRIPE_KEY2"),
+        ("GH=irondome://gh\nSTRIPE=irondome://STRIPE_KEY/password", "GH, STRIPE"),
     ):
-        (repo / ".env.irondome").write_text(f"STRIPE_KEY=irondome://stripe\n{planted}\n")
-        refused = fails(cli("run", "--cwd", str(repo), "--password-stdin", "--", "make", stdin=PASSWORD + "\n"), 2)
-        assert f"sets {named} as written" in refused.stderr
-        assert "may only point variables at entries of the vault" in refused.stderr
+        (repo / ".env.irondome").write_text(f"STRIPE_KEY=irondome://STRIPE_KEY\n{planted}\n")
+        refused = fails(cli("run", "--cwd", str(repo), "--password-stdin", "--", "/bin/sh", "-c", "make",
+                            stdin=PASSWORD + "\n"), 2)
+        assert f"sets {named} to something other than the secret you keep under that name" in refused.stderr
         assert "--env-file" in refused.stderr and not marker.exists()
+        assert "the-stripe-value-1" not in refused.stderr + refused.stdout
+        assert "octo" not in refused.stderr and "gh.example.test" not in refused.stderr  # no value is shown
+    # What is allowed: an alias under its own name, and an entry under its own name (what --env does).
+    (repo / ".env.irondome").write_text("STRIPE_KEY=irondome://STRIPE_KEY\ngh=irondome://gh\n")
+    seen = ok(cli("run", "--cwd", str(repo), "--password-stdin", "--", "/bin/sh", "-c",
+                  'test "$STRIPE_KEY" = the-stripe-value-1 && test "$gh" = the-gh-password-1', stdin=PASSWORD + "\n"))
+    assert "(from the vault, each under its own name: STRIPE_KEY, gh)" in seen.stderr
+    # A file the owner names is the owner's choice, PATH and all.
     (repo / ".env.irondome").write_text(f"STRIPE_KEY=irondome://stripe\nPATH={repo}/bin:/usr/bin:/bin\n")
     named_file = ok(cli("run", "--cwd", str(repo), "--env-file", str(repo / ".env.irondome"), "--password-stdin",
-                        "--", "make", stdin=PASSWORD + "\n"))  # a file the owner names is the owner's choice
+                        "--", "make", stdin=PASSWORD + "\n"))
     assert marker.exists() and "found in the working directory" not in named_file.stderr
 
 

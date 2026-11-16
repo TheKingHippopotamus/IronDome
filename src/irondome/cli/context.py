@@ -304,9 +304,25 @@ class Context:
             )
         return self._read_line(f"{question}\nType {phrase} to continue: ").strip() == phrase
 
+    @property
+    def typed_stdin(self) -> bool:
+        """True when what a command reads from stdin would be typed by a person at this terminal.
+
+        A line read from a terminal is echoed, and a command that waits for one without a prompt looks
+        hung. So wherever a command would take a line from stdin (``--password-stdin``, ``--value-stdin``,
+        ``--totp-stdin``, the value of a ``--field``) it asks at a hidden prompt instead when this is true:
+        the same lines, in the same order, typed unseen.
+        """
+        if not self.has_terminal:
+            return False
+        try:
+            return os.isatty(0)
+        except OSError:
+            return False
+
     def read_secret(self, prompt: str, *, allow_empty: bool = False) -> Optional[SecureBuffer]:
         """One secret, from the next line of stdin (--password-stdin) or from the terminal."""
-        if self.password_stdin:
+        if self.password_stdin and not self.typed_stdin:
             return read_secret_from_fd(0, allow_empty=allow_empty)
         if not self.has_terminal:
             raise AuthError(
