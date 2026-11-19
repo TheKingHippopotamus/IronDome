@@ -141,3 +141,32 @@ def test_backup_ls_over_a_missing_vault_reads_as_a_sentence(cli: CLI) -> None:
     assert "is at missing" not in listed.stdout + listed.stderr
 
 
+# -- the by-hand Touch ID run: a vault that would need a touch is not started where none may be asked for ---
+
+
+@pytest.mark.parametrize("mode", ["touchid", "touchid+password"])
+@pytest.mark.parametrize("how", ["flag", "environment"])
+def test_init_in_a_touch_id_mode_is_refused_up_front_where_the_prompt_is_forbidden(
+    cli: CLI, mode: str, how: str
+) -> None:
+    """The owner chose never to be asked: no vault is made or half made, and the error names the switch."""
+    arguments = ["init", "--mode", mode, "--password-stdin"] + (["--no-touch"] if how == "flag" else [])
+    env = {"IRONDOME_NO_TOUCH": "1"} if how == "environment" else {}
+    result = fails(cli(*arguments, stdin=PASSWORD + "\n", env=env), 2)
+    switch = "--no-touch" if how == "flag" else "IRONDOME_NO_TOUCH=1"
+    assert f"{switch} forbids the Touch ID prompt that enrolling needs" in result.stderr
+    assert not list(irondome_dirs()["home"].rglob("vault.irondome"))
+
+
+def test_auth_touchid_is_refused_by_the_environment_switch_as_by_the_flag(cli: CLI) -> None:
+    init(cli, "--no-recovery")
+    result = fails(cli("auth", "touchid", "--password-stdin", stdin=PASSWORD + "\n", env={"IRONDOME_NO_TOUCH": "1"}), 2)
+    assert "IRONDOME_NO_TOUCH=1 forbids the Touch ID prompt that enrolling needs" in result.stderr
+
+
+def test_a_second_bunker_in_a_touch_id_mode_is_refused_before_the_password_is_asked_for(cli: CLI) -> None:
+    """``bunker create`` proves the owner with the first bunker's password; the refusal comes before that."""
+    init(cli, "--no-recovery")
+    result = fails(cli("bunker", "create", "bravo", "--mode", "touchid", "--no-touch", "--password-stdin"), 2)
+    assert "--no-touch forbids the Touch ID prompt that enrolling needs" in result.stderr  # and no password was read
+

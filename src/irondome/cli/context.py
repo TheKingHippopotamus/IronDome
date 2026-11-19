@@ -277,7 +277,7 @@ class Context:
         except OSError:
             raise UsageError("this needs an answer from a person, and the terminal cannot be opened") from None
         with io.TextIOWrapper(io.FileIO(fd, "r+"), encoding="utf-8", errors="replace") as tty:
-            tty.write(prompt)
+            tty.write(self.out.prompt(prompt))
             tty.flush()
             return tty.readline().rstrip("\r\n")
 
@@ -329,7 +329,7 @@ class Context:
                 "there is no terminal to ask on. Pipe the value with --password-stdin, "
                 "or use a grant (IRONDOME_GRANT) or session (irondome unlock) token."
             )
-        return read_secret(prompt, allow_empty=allow_empty)
+        return read_secret(self.out.prompt(prompt), allow_empty=allow_empty)
 
     def master_password(self, purpose: Optional[str] = None) -> SecureBuffer:
         """The current master password, in locked memory. The caller wipes it.

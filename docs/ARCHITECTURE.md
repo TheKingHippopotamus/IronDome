@@ -258,6 +258,7 @@ entries are ordinary Python strings for as long as a command runs (see
 | `clipboard` | copying a secret to the clipboard and taking it off again |
 | `config` | non-secret settings (`config.json`) |
 | `errors` | every way IronDome refuses, and its exit status |
+| `cli/output` | what is printed and where: plain lines for a pipe or a script, laid out and coloured for a person at a terminal |
 | `nuke` | cryptographic erasure and cleanup |
 | `migrate_v3` | reading IronDome 3.x vaults |
 | `interop` | import/export formats |

@@ -294,6 +294,13 @@ command prints one object with a named list), or, when the command fails,
 `{"ok": false, "error": "<message>", "exit_code": <n>}`. Options are written
 out in full (`--reveal`, never `--rev`).
 
+At a terminal the output is laid out for a person: prose wrapped to the
+window (92 columns at most), a coloured mark on results, warnings and errors,
+the commands to type coloured, tables ruled. A value you may copy is never
+wrapped. A pipe or a file gets plain lines that do not depend on the
+terminal, and so does a terminal with `--no-color`, `NO_COLOR` or
+`TERM=dumb`: set one of them in a script that drives a terminal of its own.
+
 Exit codes: 0 ok · 1 error, a check that found something (`doctor`, `scan`,
 `audit --verify`, `verify`), a confirmation you declined, or work left
 unfinished (`nuke`, `bunker rm`, `rekey`, `recovery`, `migrate --destroy-old`)

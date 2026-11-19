@@ -560,8 +560,16 @@ def test_init_refuses_a_short_or_missing_password(cli: Run) -> None:
     assert not paths.vault_file().exists()
 
 
+#: The suite forbids Touch ID prompts everywhere; these tests are about a machine where they are allowed and
+#: no backend can enforce Touch ID (the suite's backend is the file-based one, so no chip is asked anything).
+TOUCH_ALLOWED = {"IRONDOME_NO_TOUCH": "0"}
+
+
 def test_touch_id_needs_a_backend_that_can_enforce_it(cli: Run) -> None:
-    fails(cli("init", "--mode", "touchid", "--password-stdin", stdin=lines(PASSWORD)), 7, "Touch ID")
+    asked = cli("init", "--mode", "touchid", "--password-stdin", stdin=lines(PASSWORD), env=TOUCH_ALLOWED)
+    fails(asked, 7, "Touch ID")
+    assert not paths.vault_file().exists()
+    fails(cli("init", "--mode", "touchid", "--password-stdin", stdin=lines(PASSWORD)), 2, "IRONDOME_NO_TOUCH=1 forbids")
     assert not paths.vault_file().exists()
 
 
@@ -698,8 +706,9 @@ def test_auth_password_from_touchid_mode_only_drops_the_touch_slot(cli: Run, tou
 
 
 def test_auth_touchid_needs_a_sensor(cli: Run, vault: str) -> None:
-    fails(owner(cli, "auth", "touchid"), 7, "Touch ID")
-    fails(owner(cli, "--no-touch", "auth", "touchid"), 2, "--no-touch")
+    fails(owner(cli, "auth", "touchid", env=TOUCH_ALLOWED), 7, "Touch ID")
+    fails(owner(cli, "auth", "touchid"), 2, "IRONDOME_NO_TOUCH=1 forbids")
+    fails(owner(cli, "--no-touch", "auth", "touchid", env=TOUCH_ALLOWED), 2, "--no-touch")
     fails(cli("auth", "touchid"), 5, "owner")
 
 
@@ -2020,7 +2029,6 @@ def test_init_at_a_terminal_asks_twice_and_waits_until_the_key_is_kept(
     cli: Run, terminal: Callable[..., Terminal]
 ) -> None:
     session = terminal("init")
-    session.expect("Checking for Touch ID")
     session.secret("New master password: ", PASSWORD)
     session.secret("Repeat it: ", PASSWORD)
     session.expect("shown this once")
@@ -2029,6 +2037,8 @@ def test_init_at_a_terminal_asks_twice_and_waits_until_the_key_is_kept(
     session.send("")
     assert session.finish() == 0, session.output
     assert PASSWORD not in session.output
+    # The suite forbids Touch ID prompts (IRONDOME_NO_TOUCH=1), so init does not look for Touch ID or offer it.
+    assert "Checking for Touch ID" not in session.output and "Choose 1, 2 or 3" not in session.output
     key = RECOVERY_KEY.search(session.output)
     assert key is not None
     unlock.unlock(VaultFile.load(), recovery_key=key.group(0)).wipe()

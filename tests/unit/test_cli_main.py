@@ -264,7 +264,8 @@ def test_no_color_holds_for_errors_from_before_the_command_runs(
 def test_without_no_color_a_terminal_gets_colour(monkeypatch: pytest.MonkeyPatch) -> None:
     terminal = on_a_terminal(monkeypatch)
     assert main.main(["lst"]) == 2
-    assert terminal.getvalue().startswith("\x1b[31merror\x1b[0m  ")
+    # Laid out: the mark in red (the word, where the stream is not known to show more than ASCII), the text bold.
+    assert terminal.getvalue().startswith("\x1b[31;1merror\x1b[0m \x1b[1m")
 
 
 def test_help_and_usage_errors_carry_no_colour_codes_even_where_python_would_colour(

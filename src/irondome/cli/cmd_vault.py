@@ -244,7 +244,7 @@ def _stdin_text(what: str) -> str:
 def _prompt_text(ctx: Context, prompt: str, what: str, alternative: str) -> str:
     if not ctx.has_terminal:
         raise UsageError(f"there is no terminal to type {what} at; pass it with {alternative}")
-    return _text_of(read_secret(prompt, allow_empty=True), what)
+    return _text_of(read_secret(ctx.out.prompt(prompt), allow_empty=True), what)
 
 
 def _skip_password_line(ctx: Context) -> None:
@@ -651,7 +651,7 @@ def _print_recovery_key(ctx: Context, key: str, bunker: str) -> None:
     ctx.out.info("")
     ctx.out.info(f"Recovery key for bunker {bunker}. It is shown this once and stored nowhere:")
     ctx.out.info("")
-    ctx.out.secret(key)
+    ctx.out.framed(key)
     ctx.out.info("")
     ctx.out.warn(
         "the recovery key opens a copy of this vault on any machine, without this device and without "
@@ -749,9 +749,25 @@ def _kdf_params(mib: Optional[int]) -> Optional[Argon2Params]:
         raise UsageError(f"--kdf-memory-mib {mib} cannot be used: {exc}") from None
 
 
+def _touch_forbidden(ctx: Context) -> Optional[str]:
+    """What forbids a Touch ID prompt for this command, by name: ``--no-touch`` or ``IRONDOME_NO_TOUCH=1``."""
+    if ctx.no_touch:
+        return "--no-touch"
+    if os.environ.get("IRONDOME_NO_TOUCH") == "1":
+        return "IRONDOME_NO_TOUCH=1"
+    return None
+
+
+def _refuse_enrolling_without_touch(ctx: Context) -> None:
+    """Enrolling ends with a touch of the sensor. Where that prompt is forbidden, say so before anything is made."""
+    forbidden = _touch_forbidden(ctx)
+    if forbidden is not None:
+        raise UsageError(f"{forbidden} forbids the Touch ID prompt that enrolling needs")
+
+
 def _offer_modes(ctx: Context) -> str:
-    """On a terminal where Touch ID works, let the person choose; otherwise the password mode."""
-    if not ctx.has_terminal or ctx.out.json_mode:
+    """On a terminal where Touch ID works and may be asked for, let the person choose; otherwise the password mode."""
+    if not ctx.has_terminal or ctx.out.json_mode or _touch_forbidden(ctx) is not None:
         return MODE_PASSWORD
     ctx.out.info("Checking for Touch ID...")
     try:
@@ -813,6 +829,8 @@ def _create(ctx: Context, args: argparse.Namespace) -> int:
             "a vault that opens with Touch ID alone needs a second way in: keep the recovery key, "
             "or set a master password"
         )
+    if args.mode not in (None, MODE_PASSWORD):
+        _refuse_enrolling_without_touch(ctx)  # before anything is asked, compiled or made
     params = _kdf_params(args.kdf_memory_mib)
     _prove_for_another_bunker(ctx, name)
     mode = args.mode if args.mode is not None else _offer_modes(ctx)
@@ -981,7 +999,7 @@ def _print_status(ctx: Context, document: Dict[str, Any]) -> None:
     if legacy is not None:
         detail = f"damaged: {legacy['error']}" if legacy["error"] else "bring it over with: irondome migrate"
         pairs.append(("3.x vault", f"{legacy['path']} ({detail})"))
-    ctx.out.pairs(pairs)
+    ctx.out.pairs(pairs, wrap=True)
 
 
 def _status(ctx: Context, args: argparse.Namespace) -> int:
@@ -2161,8 +2179,7 @@ def _auth_show(ctx: Context, args: argparse.Namespace) -> int:
 def _auth_touchid(ctx: Context, args: argparse.Namespace) -> int:
     _require_owner(ctx, "enrolling Touch ID")
     _require_vault()
-    if ctx.no_touch:
-        raise UsageError("--no-touch forbids the Touch ID prompt that enrolling needs")
+    _refuse_enrolling_without_touch(ctx)
     backend = _choose_backend(POLICY_BIOMETRY)
     bunker = _bunker()
     reason = f"enrol Touch ID for bunker {bunker}"

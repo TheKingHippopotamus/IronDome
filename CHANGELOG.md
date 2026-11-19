@@ -247,6 +247,64 @@ Not covered by that trial: everything that needs a finger, the clipboard, a
 second Mac, a locked screen, and memory (the tools for it raise dialogs or
 need more rights than the lab had).
 
+### Found with a finger on the sensor
+
+No test can touch a sensor, and the trial on a Mac above ran with Touch ID
+switched off. So the owner ran every Touch ID path by hand, once, on the
+release build of the commit before this one, in a throwaway home: 15 steps,
+seven touches, four presses of Cancel, each step's outcome written down
+(`irondome verify --touch`, a vault that opens with a finger, Cancel falling
+back to the master password, an agent refused without leave to ask,
+`irondome approve` for one minute and the grant it makes, `irondome run
+--touch`, the audit log, and a vault that needs the password and a finger
+together). Every refusal and every acceptance was the one the documents
+promise. What it found, and what was done:
+
+- **Everything looked the same.** One font, one colour, long unbroken lines:
+  hard to follow. At a terminal IronDome now lays its output out: prose is
+  wrapped to the terminal's width (92 columns at most) and continues under
+  where it began, a result carries a green mark, a warning a yellow one and
+  an empty line between it and the messages before and after it, an error a
+  red one and bold text, the commands a message tells you to type are
+  coloured, progress lines are faint, the question of a prompt is bold (not
+  on Windows), tables have ruled headings and coloured states, a long last
+  column continues under itself, `doctor`'s findings carry the same marks,
+  and a recovery key stands in a frame. Picking the commands out of a
+  sentence is a judgement; it colours and changes nothing else. A value a
+  person may copy is never wrapped or trimmed: what `show --reveal` prints
+  is the value, character for character. A pipe and a file get exactly the
+  lines they got before, and so does a terminal when colour is off
+  (`--no-color`, `NO_COLOR`, `TERM=dumb`): that plain form is the stable
+  one, and the whole test suite reads it. A program that drives a terminal
+  of its own (expect, `script`) sees what a person sees, and sets `NO_COLOR`
+  for the plain lines.
+- **`init` in a Touch ID mode went as far as the chip before refusing** when
+  the owner had forbidden Touch ID prompts: no dialog appeared, but the
+  helper was compiled and the error spoke of "this vault", which did not
+  exist. `init` and `bunker create` with `--mode touchid` or `--mode
+  touchid+password` are now refused before anything is asked or made, by
+  `--no-touch` and by `IRONDOME_NO_TOUCH=1` alike, in the words `auth
+  touchid` already used; `auth touchid` honours the environment switch as it
+  did the flag; and `init` no longer offers the Touch ID modes where the
+  prompt is forbidden.
+
+An independent reviewer then read the new output code. The first version
+wrapped every long value, a password shown by `show --reveal` included: a
+tab became spaces, spaces at the end were dropped, a long passphrase was
+broken over two lines. It also took prose for part of a command in one
+message and coloured only part of the command in six, read the terminal's
+width before `COLUMNS`, and built two more copies of a recovery key than it
+needed to. All of that is fixed above, each with a test.
+
+One answer in that run is not explained: at step 4 the owner answered that
+the enrolment dialog did not read "enrol Touch ID for your IronDome vault",
+which is the text the code sends. The step-15 exit status the trial's script
+flagged was the script's own mistake (it read the status of the wrong
+command in a pipeline); the product had refused, as its error line shows.
+
+Not covered by that run: adding or removing a fingerprint, the MCP server's
+reveal path, a vault with no master password at all, a locked screen.
+
 ### Added
 
 - **Cryptography:** Argon2id (256 MiB, t=3, p=4 by default, 64 MiB on a

@@ -445,7 +445,7 @@ def _show_recovery(ctx: Context, key: str, what: str) -> None:
         f"Recovery key for {what}. It is shown only this once: write it down and keep it offline. "
         "It opens a copy of the file without a password or this computer."
     )
-    ctx.out.secret(key)
+    ctx.out.framed(key)
 
 
 def _plain(value: Any) -> Any:
@@ -2085,7 +2085,7 @@ def _show_nuked(ctx: Context, report: nuke.NukeReport, legacy: Optional[Dict[str
     ]
     if legacy is not None:
         rows.append(("3.x vault", "destroyed" if legacy["success"] else "not completely destroyed"))
-    ctx.out.pairs(rows)
+    ctx.out.pairs(rows, wrap=True)
     for path in report.foreign:
         ctx.out.info(f"left in place (not created by IronDome): {path}")
     problems = list(report.errors) + [f"left on disk: {path}" for path in report.leftovers]
@@ -2154,7 +2154,7 @@ def cmd_doctor(ctx: Context, args: argparse.Namespace) -> int:
     if helper is not None:
         rows.append(("enclave helper", ("compiled" if helper.get("built") else "not compiled")
                      + f", source sha256 {helper.get('source_sha256')}"))
-    ctx.out.pairs(rows)
+    ctx.out.pairs(rows, wrap=True)
     ctx.out.data()
     ctx.out.table(
         ("backend", "available", "kind", "detail"),
@@ -2173,9 +2173,7 @@ def cmd_doctor(ctx: Context, args: argparse.Namespace) -> int:
         )
     ctx.out.data()
     for finding in report["findings"]:
-        ctx.out.data(f"{finding['severity']:<8} {finding['check']}: {finding['message']}")
-        if finding["remedy"]:
-            ctx.out.data(f"{'':<8} fix: {finding['remedy']}")
+        ctx.out.finding(finding["severity"], finding["check"], finding["message"], finding["remedy"])
     return 1 if doctor.has_problem(report) else 0
 
 

@@ -226,7 +226,9 @@ def _common_options() -> argparse.ArgumentParser:
         help="print one JSON document on stdout: the result, or the error the command ended with",
     )
     group.add_argument("-q", "--quiet", action="store_true", default=argparse.SUPPRESS, help="no progress messages")
-    group.add_argument("--no-color", action="store_true", default=argparse.SUPPRESS, help="never colour the output")
+    group.add_argument(
+        "--no-color", action="store_true", default=argparse.SUPPRESS, help="plain output: no colour, no layout"
+    )
     group.add_argument(
         "--password-stdin",
         action="store_true",
