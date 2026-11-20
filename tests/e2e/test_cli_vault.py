@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 import pytest
 
+import irondome
 from conftest import PASSWORD, secret
 from irondome import caps, otp, paths, unlock
 from irondome.errors import AuthError
@@ -412,6 +413,20 @@ def legacy_fixture(name: str = "password_only") -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def words_in(passphrase: str) -> int:
+    """How many words of the list a generated passphrase holds.
+
+    Four words of the EFF list have a hyphen of their own (felt-tip, drop-down, t-shirt, yo-yo), and
+    the words are joined with hyphens: counting the hyphens failed once on GitHub, on
+    ``islamist-devotion-defiance-felt-tip``.
+    """
+    listed = (Path(irondome.__file__).parent / "data" / "eff_large_wordlist.txt").read_text(encoding="utf-8")
+    hyphenated = sorted(line.split()[-1] for line in listed.splitlines() if "-" in line.split()[-1])
+    assert hyphenated == ["drop-down", "felt-tip", "t-shirt", "yo-yo"]
+    whole = re.compile("(?:(?<=-)|^)(?:" + "|".join(map(re.escape, hyphenated)) + ")(?=-|$)")
+    return len(whole.sub("word", passphrase).split("-"))
+
+
 def test_with_no_command_and_no_vault_it_says_how_to_start(cli: Run) -> None:
     result = ok(cli())
     shown = result.stdout.splitlines()
@@ -748,7 +763,7 @@ def test_add_takes_the_value_from_each_source(cli: Run) -> None:
     assert len(value) == 32 and value.isalnum() and not set(value) & set("0Oo1lI")
 
     shown = ok(owner(cli, "add", "three", "--words", "5", "--show"))
-    assert shown.stdout == get(cli, "three") and len(shown.stdout.split("-")) == 5
+    assert shown.stdout == get(cli, "three") and words_in(shown.stdout) == 5
 
     ok(owner(cli, "add", "four", "--value-stdin", more=["typed value with spaces  "]))
     assert get(cli, "four") == "typed value with spaces  "
@@ -999,7 +1014,7 @@ def test_gen_needs_no_vault_and_prints_only_the_value(cli: Run) -> None:
     assert "bits of entropy" in result.stderr and result.stdout not in result.stderr
     lower = ok(cli("gen", "--length", "40", "--no-symbols", "--no-digits", "--no-upper")).stdout
     assert len(lower) == 40 and lower.isalpha() and lower.islower()
-    assert len(ok(cli("gen", "--words", "4")).stdout.split("-")) == 4
+    assert words_in(ok(cli("gen", "--words", "4")).stdout) == 4
     name = ok(cli("gen", "--username", "--length", "12"))
     assert re.fullmatch(r"[a-z][a-z0-9]{11}", name.stdout) and name.stderr == ""
     assert re.fullmatch(r"me\+[a-z0-9]{8}@example\.com", ok(cli("gen", "--email-alias", "me@example.com")).stdout)

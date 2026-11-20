@@ -719,6 +719,15 @@ def test_a_recorded_device_secret_this_machine_cannot_give_is_replaced(vault, re
     descriptor = isinstance(recorded, dict) and recorded.get("policy") == "device" and recorded.get("backend") in (
         "linux-tpm2", "macos-se", "software")
     assert retired(vault) == ([recorded] if descriptor else []), "a descriptor is kept; anything else cannot be"
+    if isinstance(recorded, dict) and recorded.get("backend") == "linux-tpm2" and device.applies_here("linux-tpm2"):
+        try:
+            device.get_backend("linux-tpm2").exists(recorded)
+        except IronDomeError:
+            # Linux, and no TPM that can be asked (GitHub's Linux machines have neither the chip nor
+            # tpm2-tools). The index could be in this machine's own chip, so it is not called gone.
+            with pytest.raises(HardwareError, match=r"\(1 was\).*linux-tpm2 device key.*could not be checked"):
+                caps.destroy_device(vault)
+            return
     assert caps.destroy_device(vault) == 1, "the one made here; the other machine's is not here to destroy"
 
 

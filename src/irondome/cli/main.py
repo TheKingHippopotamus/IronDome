@@ -331,20 +331,24 @@ def _open_standard_streams() -> None:
 
     A shell can start a program with one of them closed (``irondome status >&-``). Python then puts
     ``None`` in its place, and the first write to it would end in a traceback.
+
+    ``None`` is what says the stream was closed, not the state of descriptor 0, 1 or 2 now: by the
+    time this runs, an import may have left a file of its own on the lowest free descriptor (some
+    Python builds keep ``/dev/urandom`` or their own executable open). That descriptor is then
+    valid and is not ours to write to, so the stream gets the null device on whichever descriptor
+    the system hands out; when the number is still free, that is the stream's own.
     """
-    for number, name, mode in ((0, "stdin", "r"), (1, "stdout", "w"), (2, "stderr", "w")):
+    for name, mode in (("stdin", "r"), ("stdout", "w"), ("stderr", "w")):
+        if getattr(sys, name) is not None:
+            continue
         try:
-            os.fstat(number)
+            descriptor = os.open(os.devnull, os.O_RDWR)
         except OSError:
-            try:
-                os.open(os.devnull, os.O_RDWR)  # the lowest free descriptor, which is this one
-            except OSError:
-                continue  # no null device: left closed, and Python's own None is what a write meets
-        if getattr(sys, name) is None:
-            try:
-                setattr(sys, name, open(number, mode, closefd=False))  # noqa: SIM115 - lives as long as the process
-            except OSError:
-                pass
+            continue  # no null device: Python's own None is what a write meets
+        try:
+            setattr(sys, name, open(descriptor, mode, closefd=False))  # noqa: SIM115 - lives as long as the process
+        except OSError:
+            os.close(descriptor)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -52,6 +52,10 @@ _SAFE_ENV = {
     "IRONDOME_NO_TOUCH": "1",
     "IRONDOME_NO_PROMPT": "1",
     "HYPOTHESIS_STORAGE_DIRECTORY": str(_SESSION_ROOT / "hypothesis"),
+    # The Python that Apple ships (Xcode's 3.9) keeps its bytecode cache under the home directory,
+    # in Library/Caches/com.apple.python. With HOME inside a test's directory every command the test
+    # starts would write that cache there, and a test that says a command wrote nothing would count it.
+    "PYTHONDONTWRITEBYTECODE": "1",
 }
 (_SESSION_ROOT / "home").mkdir()
 os.environ.update(_SAFE_ENV)

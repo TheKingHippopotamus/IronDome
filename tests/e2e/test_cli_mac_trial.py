@@ -116,6 +116,36 @@ def test_a_closed_standard_stream_is_not_a_traceback(cli: CLI, closed: str) -> N
         assert result.returncode in (0, 1, 2, 4), (command, closed, result.returncode, result.stderr)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="a POSIX shell closes the stream")
+@pytest.mark.parametrize("number, closed", [(1, ">&-"), (2, "2>&-")])
+def test_a_file_on_the_descriptor_of_a_closed_stream_is_not_written_to(
+    cli: CLI, tmp_path: Path, number: int, closed: str
+) -> None:
+    """On GitHub's Linux machines ``irondome status >&-`` ended with status 120 and "Bad file descriptor".
+
+    Python 3.9 there keeps ``/dev/urandom`` open and 3.14 its own executable, on the lowest free
+    descriptor: the one the closed stream had left. IronDome took that descriptor for the stream
+    and wrote to it. Here a file of the test's sits there, open for writing.
+    """
+    init(cli, "--no-recovery")
+    taken = tmp_path / "taken"
+    taken.write_text("not a stream\n", encoding="utf-8")
+    for command in (["status"], ["gen"]):
+        program = (
+            "import os, sys\n"
+            f"assert os.open({str(taken)!r}, os.O_RDWR | os.O_APPEND) == {number}\n"
+            "from irondome.cli.main import main\n"
+            f"sys.exit(main({command!r}))\n"
+        )
+        result = subprocess.run(
+            ["/bin/sh", "-c", f'exec "$0" -c "$1" {closed}', sys.executable, program],
+            capture_output=True, text=True, timeout=120,
+        )
+        assert result.returncode == 0, (command, closed, result.returncode, result.stderr)
+        assert "Bad file descriptor" not in result.stderr and "Traceback" not in result.stderr, result.stderr
+        assert taken.read_text(encoding="utf-8") == "not a stream\n", "the command's output went into a file"
+
+
 # -- small things said wrongly ------------------------------------------------------------------------------
 
 

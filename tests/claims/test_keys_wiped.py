@@ -318,13 +318,24 @@ def test_the_search_finds_the_copy_of_a_long_master_password_when_argon2id_is_gi
     Whether one run leaves it is up to the allocator, so the probe is run up
     to five times: a search that never finds it would prove nothing about
     the run that gives Argon2id the prehash.
+
+    That is what was seen on arm64. On x86-64 with glibc nothing of the copy
+    is left to find: not once in 35 runs on GitHub's machines, nor on a second
+    x86-64 machine. There the test still shows that the search works, by the
+    key each probe drops on purpose and must find, and is then skipped rather
+    than passed: it has not shown what its name says.
     """
+    known_to_leave_a_copy = sys.platform == "darwin" or platform.machine().lower() in ("aarch64", "arm64")
     found: List[str] = []
     for attempt in range(5):
         document = selftest.long_password_probe(tmp_path / str(attempt), length=2000, control=True)
+        dropped = [needle for needle in document["needles"] if needle["kind"] == "control-dropped"]
+        assert len(dropped) == 1 and dropped[0]["hits"], "the search missed the key the probe dropped on purpose"
         found = [label for label in found_labels(document) if label.startswith("master password, bytes")]
         if found:
             break
+    if not found and not known_to_leave_a_copy:
+        pytest.skip(f"on {platform.machine()} the library left no copy of the password in five runs; the search works")
     assert found, "the search missed the copy Argon2id makes of a password it is given, so it proves nothing"
 
 
