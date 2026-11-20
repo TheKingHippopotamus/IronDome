@@ -152,10 +152,37 @@ uses them is in scope.
   so the build backend (`setuptools`) is pinned by hash in `scripts/check.sh`,
   the one build recipe CI, the release and a local build share.
 * Workflow actions are pinned to commit hashes, and CI checks the workflows
-  with zizmor. A release tag must be on main; the release runs the whole CI on
-  it, then builds in a job that runs nothing but that recipe and a check of
-  what it built (named for the tag, only committed files, the verbatim
-  GPL-3.0 LICENSE), and uploads through PyPI Trusted Publishing; the release
-  workflow uses no upload token.
+  with zizmor. A release tag must be on main; the release workflow runs the
+  whole CI on it, then builds in a job that runs nothing but that recipe and a
+  check of what it built (named for the tag, only committed files, the
+  verbatim GPL-3.0 LICENSE), and uploads through PyPI Trusted Publishing,
+  with no upload token.
+
+### How 4.0.0 itself was released
+
+Not through those workflows. GitHub Actions does not run on the maintainer's
+account (runs have stayed queued since at least September 2026), so for 4.0.0
+neither the CI workflow nor the release workflow ran. What was done in their
+place, on the maintainer's Mac:
+
+* The complete gate, `scripts/check.sh --linux`, ran to its last line on the
+  release commit: the whole suite on macOS on Python 3.9 and 3.14 with the
+  Secure Enclave, lint, types, the claims document, `pip-audit`, the build and
+  a clean install of the wheel, then the whole suite in a Linux container
+  with a software TPM on Python 3.9 and 3.13.
+* The two files were built with the release workflow's own recipe,
+  `scripts/check.sh --build dist --release 4.0.0`, from the commit the tag
+  `v4.0.0` names, and uploaded by hand with a PyPI token scoped to this
+  project. PyPI therefore holds no provenance attestation for them.
+* Their SHA-256 hashes are in the message of the tag `v4.0.0`
+  (`git show v4.0.0`), to compare with what PyPI serves.
+
+The build is not byte-for-byte reproducible: two builds of one commit differ
+in the timestamps inside the archives and in nothing else. To check a file
+from PyPI against the source, build the tag with that recipe and compare the
+two archives member by member.
+
+A later release goes through the workflows again once they run; until then
+each release says here how it was made.
 
 IronDome has not been audited by an independent party.

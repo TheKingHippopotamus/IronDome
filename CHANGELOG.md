@@ -6,7 +6,7 @@ This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 The version number lives in exactly one place, `src/irondome/__init__.py`;
 `pyproject.toml` reads it from there via `[tool.setuptools.dynamic]`.
 
-## [4.0.0] — unreleased
+## [4.0.0] — 2026-11-20
 
 A new vault, a new command line and a new purpose. Version 3 published six
 things it could not do: five on its website, and the cipher on its PyPI page.
@@ -18,6 +18,12 @@ stands.
 Python package name and every command changed. `irondome migrate` converts a
 3.x vault, verifies every entry and leaves the old vault untouched unless
 `--destroy-old` is given and every entry matched.
+
+**Published by hand.** GitHub Actions does not run on the maintainer's
+account, so neither the CI workflow nor the release workflow ran for this
+version: the gate was run on the maintainer's Mac, the files were built there
+and uploaded with a project token, and PyPI holds no provenance attestation
+for them. `SECURITY.md` says exactly what was run and how to check the files.
 
 ### The five published limits, closed
 
