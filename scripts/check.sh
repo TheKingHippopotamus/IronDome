@@ -31,6 +31,11 @@
 
 set -euo pipefail
 
+# The uv settings in pyproject.toml (exclude-newer, the week a release must be
+# public) are part of what uv.lock is checked against, and CI reads them. A
+# shell that sets UV_NO_CONFIG would check the lock without them.
+unset UV_NO_CONFIG
+
 # The build backend, pinned by hash. uv.lock does not cover build dependencies,
 # and this is the one package whose code writes the shipped files. To move the
 # pin, on a machine with network access, run

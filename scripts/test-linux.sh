@@ -32,6 +32,11 @@
 
 set -eu
 
+# The uv settings in pyproject.toml (exclude-newer, the week a release must be
+# public) are part of what uv.lock is checked against, and CI reads them. A
+# shell that sets UV_NO_CONFIG would check the lock without them.
+unset UV_NO_CONFIG
+
 DEFAULT_PYTHONS="3.9 3.13"
 IMAGE_TAG="localhost/irondome-linux-test"
 COPY_DIR="irondome"

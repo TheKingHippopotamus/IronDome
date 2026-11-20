@@ -242,6 +242,43 @@ def test_ci_installs_no_os_package_of_its_own():
     assert "/etc/irondome-test-image.versions" in text(REPOSITORY / "tests" / "linux" / "Containerfile")
 
 
+# -- found by the first run of CI on GitHub: every job failed within seconds -----------------------
+
+
+def test_the_lockfile_was_resolved_under_the_week_pyproject_sets():
+    """uv.lock had been written by a shell with UV_NO_CONFIG set: without exclude-newer, so CI refused it."""
+    assert pyproject()["tool"]["uv"]["exclude-newer"] == "7 days"
+    options = re.search(r"^\[options\]\n((?:.+\n)+)", text(REPOSITORY / "uv.lock"), re.M)
+    assert options, "uv.lock records no options: it was resolved without the settings in pyproject.toml"
+    assert 'exclude-newer-span = "P7D"' in options.group(1).splitlines()
+
+
+@needs_ci_config
+def test_the_gates_read_the_uv_settings_ci_reads():
+    """The local gate passed a lockfile CI refused: its shell had switched the project's uv settings off."""
+    for script in (CHECK, REPOSITORY / "scripts" / "test-linux.sh"):
+        commands = shell_commands(script)
+        assert "unset UV_NO_CONFIG" in commands, script.name
+        uses_uv = re.compile(r"(^|[\s;&|(])uv (lock|sync|run|export|build)\b")
+        first_uv = next(index for index, command in enumerate(commands) if uses_uv.search(command))
+        assert commands.index("unset UV_NO_CONFIG") < first_uv, script.name
+    for workflow in (CI, RELEASE):
+        assert "UV_NO_CONFIG" not in text(workflow) and "--no-config" not in text(workflow), workflow.name
+
+
+@needs_ci_config
+def test_every_job_that_runs_uv_installs_it():
+    """The TPM job ran the harness, which checks uv.lock with uv, on a runner that had no uv."""
+    for workflow in (CI, RELEASE):
+        for name, block in jobs(workflow).items():
+            needs_uv = any(
+                re.search(r"(^|[\s;&|(])uv\b|scripts/test-linux\.sh|scripts/check\.sh", command)
+                for command in run_lines(block)
+            )
+            if needs_uv:
+                assert "uses: astral-sh/setup-uv@" in block, f"{workflow.name}: job {name}"
+
+
 # -- ci-review: what CI must also do ----------------------------------------------------------
 
 

@@ -160,9 +160,9 @@ uses them is in scope.
 
 ### How 4.0.0 itself was released
 
-Not through those workflows. The repository moved to its present home on the
-day 4.0.0 was released, before either workflow had completed a run there, so
-4.0.0 does not rest on any run of them. What was done in their place, on the
+Not through the release workflow. The repository moved to its present home on
+the day 4.0.0 was released, and the release workflow had never run there; a
+first release was not the place to try it. What was done in its place, on the
 maintainer's Mac:
 
 * The complete gate, `scripts/check.sh --linux`, ran to its last line on the
