@@ -12,6 +12,7 @@ import csv
 import json
 import os
 import stat
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -649,7 +650,14 @@ def test_dump_json_keeps_text_that_is_not_valid_unicode() -> None:
 
 _NAME_CHARS = st.characters(blacklist_categories=("Cs", "Cc", "Zl", "Zp"))
 _VALUE_CHARS = st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00")
-_names = st.text(_NAME_CHARS, min_size=1, max_size=30).map(str.strip).filter(bool)
+#: Names as the vault stores them: in NFC, with no space at either end. An import puts a name into that
+#: form (see test_an_imported_name_is_stored_in_nfc), so only such a name comes back exactly as it went in.
+_names = (
+    st.text(_NAME_CHARS, min_size=1, max_size=30)
+    .map(str.strip)
+    .map(lambda text: unicodedata.normalize("NFC", text))
+    .filter(lambda text: bool(text) and text == text.strip())
+)
 _values = st.text(_VALUE_CHARS, max_size=40)
 #: What the vault keeps in a username: anything but control characters (see test_control_characters_...).
 _usernames = st.text(st.characters(blacklist_categories=("Cs", "Cc", "Zl", "Zp")), max_size=40)
@@ -705,6 +713,22 @@ def _without_origin(entries: List[ImportedEntry]) -> List[ImportedEntry]:
 @given(_entries(csv_safe=False))
 def test_json_round_trip_is_exact(entries: List[ImportedEntry]) -> None:
     assert _without_origin(interop.parse(interop.dump(entries, "json"), "auto")) == entries
+
+
+@pytest.mark.parametrize("fmt", ["json", "csv"])
+@pytest.mark.parametrize(
+    ("spelled", "stored"),
+    [("cafe\u0301", "caf\u00e9"), ("\uf900", "\u8c48")],  # a letter and its accent; a compatibility ideograph
+)
+def test_an_imported_name_is_stored_in_nfc(fmt: str, spelled: str, stored: str) -> None:
+    """The vault keeps names in one Unicode form, so a round trip gives a name back in that form, not as typed.
+
+    A property test found this the slow way: 150 random names a run, and one day one whose NFC form differs.
+    """
+    entry = ImportedEntry(name=spelled, password="x")
+    [back] = interop.parse(interop.dump([entry], fmt), "auto")
+    assert back.name == stored == unicodedata.normalize("NFC", spelled)
+    assert back.password == "x"
 
 
 @PROPERTY

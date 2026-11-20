@@ -244,17 +244,55 @@ def test_a_freed_bytes_copy_is_found_and_a_wiped_one_is_not(scanner):
         assert bool(scanner.scan(table, writable_only=True).hits[0]) is expected
 
 
-def test_freshly_freed_small_objects_are_not_overwritten_by_the_scan(scanner):
-    """Calibration: the pass allocates nothing that could land on a block freed just before it."""
-    sizes = [size - bytes.__basicsize__ for size in range(48, 513, 16)]
-    table = memscan.NeedleTable(capacity=len(sizes), size=64 * len(sizes))
+CALIBRATED = [size - bytes.__basicsize__ for size in range(48, 513, 16)]  # one bytes object per size class
+
+
+def lost_in_every_attempt(scanner, attempts: int, overwritten=None) -> list:
+    """The size classes whose freshly freed block a pass did not find, in each of *attempts* tries.
+
+    *overwritten*, when given, is the index of a block whose content is wiped before it is freed: the
+    control uses it to lose one block on purpose, every time.
+    """
     scan = scanner.scan  # bound first: on 3.9 "scanner.scan(..., keyword=...)" makes a 64-byte method object
-    decoys = [os.urandom(size) for size in sizes]
-    for decoy in decoys:
-        table.add(memoryview(decoy)[:32])
-    decoys.clear()
-    result = scan(table, writable_only=True)
-    assert [index for index, hits in enumerate(result.hits) if not hits] == []
+    lost = set(range(len(CALIBRATED)))
+    for _ in range(attempts):
+        gc.collect()  # before the blocks are made, as in the test above: finalizers allocate
+        table = memscan.NeedleTable(capacity=len(CALIBRATED), size=64 * len(CALIBRATED))
+        decoys = [os.urandom(size) for size in CALIBRATED]
+        index = 0
+        while index < len(decoys):  # no loop variable: it would keep the last block alive
+            table.add(memoryview(decoys[index])[:32])
+            index += 1
+        if overwritten is not None:
+            wipe_bytes(decoys[overwritten])
+        decoys.clear()
+        result = scan(table, writable_only=True)
+        lost &= {index for index, hits in enumerate(result.hits) if not hits}
+        if not lost:
+            break
+    return sorted(lost)
+
+
+def test_freshly_freed_small_objects_are_not_overwritten_by_the_scan(scanner):
+    """Calibration: the pass allocates nothing that could land on a block freed just before it.
+
+    What a pass allocates, it allocates every time: the same code runs. A size class the pass takes for
+    itself is therefore lost in every attempt, and that is what fails here. One attempt alone can lose a
+    block to something that is not the pass, such as a thread or a finalizer an earlier test left behind:
+    that was seen once, in the 48-byte class, in a whole-suite run on Linux and Python 3.13, and not once
+    in 40 repetitions of this module there. The test below shows that a block lost every time is caught.
+    """
+    assert lost_in_every_attempt(scanner, attempts=3) == []
+
+
+@pytest.mark.parametrize("index", [0, len(CALIBRATED) - 1])
+def test_the_calibration_catches_a_block_that_is_lost_every_time(scanner, index):
+    """The control: a block whose content is gone before the pass is reported, and no other block is.
+
+    The content is wiped rather than taken by a new allocation: where the allocator puts a new object
+    is its own business, and on Linux it mostly did not put one on the block freed last.
+    """
+    assert lost_in_every_attempt(scanner, attempts=3, overwritten=index) == [index]
 
 
 def test_every_function_a_pass_runs_was_run_past_cpythons_cache_threshold_first(scanner, monkeypatch):

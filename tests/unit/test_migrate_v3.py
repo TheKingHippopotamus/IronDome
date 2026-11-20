@@ -58,7 +58,7 @@ from irondome.errors import AuthError, UsageError, VaultError
 from irondome.migrate_v3 import LegacyEntry, LegacyVault
 from irondome.secmem import SecureBuffer
 from irondome.unlock import open_vault
-from irondome.vault import Secret, VaultFile, validate_name
+from irondome.vault import Secret, VaultFile, fold_name, validate_name
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "v3"
 
@@ -2025,7 +2025,7 @@ def test_planned_names_are_always_valid_unique_and_repeatable(entries: List[Lega
 
 
 @settings(parent=PROPERTY, max_examples=150)
-@given(websites=st.lists(st.text(max_size=20), unique_by=str.casefold, max_size=10))
+@given(websites=st.lists(st.text(max_size=20), unique_by=fold_name, max_size=10))
 def test_websites_that_are_already_distinct_valid_names_are_used_unchanged(websites: List[str]) -> None:
     usable = []
     for website in websites:
