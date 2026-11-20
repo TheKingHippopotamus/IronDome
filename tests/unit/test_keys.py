@@ -1273,6 +1273,7 @@ def test_argon2id_is_never_given_the_master_password(monkeypatch: pytest.MonkeyP
         return Recorder()
 
     monkeypatch.setattr(crypto, "Argon2id", spying)
+    monkeypatch.setattr(crypto, "_stretch_in_child", lambda *arguments: False)  # so that the spy sees every run
     password = (b"a long master password, " * 200)[:length]
     vault_id = os.urandom(VAULT_ID_LEN)
     with keys.new_vault_key() as vault_key:
@@ -1285,3 +1286,27 @@ def test_argon2id_is_never_given_the_master_password(monkeypatch: pytest.MonkeyP
         assert material != password and material not in password
         # A password of a few bytes can turn up in 32 pseudorandom ones by chance: 16 bytes cannot.
         assert len(password) < 16 or all(password[at : at + 16] not in material for at in range(len(password) - 15))
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="there is no fork on this system")
+@pytest.mark.parametrize("length", [8, 64, 4000])
+def test_the_child_that_runs_argon2id_is_sent_the_prehash_never_the_master_password(
+    monkeypatch: pytest.MonkeyPatch, length: int
+) -> None:
+    sent: List[bytes] = []
+    real = crypto._stretch_in_child
+
+    def spying(view: Any, salt: bytes, params: Any, out: Any) -> bool:
+        sent.append(bytes(view))
+        return real(view, salt, params, out)
+
+    monkeypatch.setattr(crypto, "_stretch_in_child", spying)
+    password = (b"a long master password, " * 200)[:length]
+    vault_id = os.urandom(VAULT_ID_LEN)
+    with keys.new_vault_key() as vault_key:
+        slot = create_password_slot(vault_key, password, vault_id, params=FAST, backend=None)
+        with open_slot(slot, vault_id, password=password) as opened:
+            assert bytes(opened.view()) == bytes(vault_key.view())
+
+    assert len(sent) == 2 and sent[0] == sent[1] and len(sent[0]) == 32
+    assert password[:8] not in sent[0] and sent[0] not in password

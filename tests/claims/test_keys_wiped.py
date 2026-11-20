@@ -204,37 +204,28 @@ def test_a_non_ascii_master_password_leaves_no_copy_in_any_form(probes):
 #: prehash IronDome makes of the master password, never the password: no form of the password is on this
 #: list. (HKDF leaves a copy of the key it derives too, on the C stack and in memory it frees: IronDome
 #: derives again from zeros, which overwrites it, so that copy is not on this list.)
-ARGON2_INPUT = ("prehash of the master password",)
-
-
 def found_labels(document: Dict[str, Any]) -> List[str]:
     return sorted(needle["label"] for needle in key_needles(document) if needle["hits"])
 
 
-def assert_argon2_input_copies_are_in_system_malloc(document: Dict[str, Any]) -> None:
-    """Python keeps objects this small in its own arenas (``anonymous`` memory), and IronDome its keys in locked
-    pages: a copy in ``MALLOC_*`` memory is one that native code made with malloc."""
-    for needle in key_needles(document):
-        if needle["label"] in ARGON2_INPUT:
-            assert all("MALLOC_" in hit["where"] for hit in needle["hits"]), needle
-
-
 @pytest.mark.skipif(sys.platform != "darwin", reason="on Linux the allocator never zeroes what is freed")
-def test_boundary_on_macos_without_zero_on_free_only_the_copy_argon2id_makes_of_the_prehash_can_be_left(probes):
-    """With ``MallocZeroOnFree=0`` macOS behaves like glibc: a block freed without wiping keeps its bytes.
+def test_on_macos_without_zero_on_free_no_key_is_left_either(probes):
+    """With ``MallocZeroOnFree=0`` macOS keeps the bytes of a block freed without wiping, and does not hand the
+    block straight back to the next request as glibc does.
 
-    Then the scan after the vault is locked may find the prehash of the
-    master password, in the copy Argon2id makes of it inside
-    pyca/cryptography (OpenSSL) and frees without overwriting, and nothing
-    else: no form of the master password itself. Whether that block is still
-    unused when the scan runs is up to the allocator, so this asserts what
-    may be found and where, never that a copy is found.
+    That is how GitHub's macOS 15 machines behaved as they are. While Argon2id
+    still ran in IronDome's own process, the copy it makes of the prehash was
+    found there after the vault was locked, in about half the runs. Argon2id
+    runs in a child process now and the copy ends with the child: the scan
+    finds no key at all, the prehash included. It still finds the key the
+    probe drops on purpose, so an empty result is not a search that sees
+    nothing.
     """
     document = probes["unzeroed"]
     dropped = [needle for needle in document["needles"] if needle["kind"] == "control-dropped"]
     assert len(dropped) == 1 and dropped[0]["hits"]
-    assert [label for label in found_labels(document) if label not in ARGON2_INPUT] == []
-    assert_argon2_input_copies_are_in_system_malloc(document)
+    assert "prehash of the master password" in labels(document)
+    assert leftovers(document) == []
 
 
 @pytest.fixture(scope="module")
@@ -267,17 +258,16 @@ def test_the_derivation_probe_recorded_every_form_and_saw_its_control(derivation
     assert len(dropped) == 1 and dropped[0]["hits"]
 
 
-def test_boundary_right_after_a_derivation_the_only_copy_is_the_one_argon2id_makes_of_the_prehash(derivation):
-    """Searched at once, with freed memory unzeroed: what Argon2id copies inside pyca/cryptography may be there.
+def test_right_after_a_derivation_nothing_is_left_not_even_what_argon2id_was_given(derivation):
+    """Searched at once, with freed memory unzeroed, before later work can reuse a block.
 
-    Argon2id's copy of the 32-byte prehash it was fed, in system-malloc
-    memory. No copy of the master password, as typed or as normalised, of the
-    Argon2id output, of the HKDF output, or of any form IronDome itself makes.
-    Whether a run finds the named copy is up to the allocator, so this asserts
-    only what may be found, and where.
+    No copy of the master password, as typed or as normalised, of its prehash,
+    of the Argon2id output, of the HKDF output, or of any form IronDome itself
+    makes. The prehash is what Argon2id is given and what the library copies:
+    that copy was made in the child process that ran Argon2id, and is not in
+    this one.
     """
-    assert [label for label in found_labels(derivation) if label not in ARGON2_INPUT] == []
-    assert_argon2_input_copies_are_in_system_malloc(derivation)
+    assert leftovers(derivation) == []
 
 
 @pytest.mark.parametrize("length", [660, 700, 2000, 4000])
@@ -299,8 +289,7 @@ def test_no_part_of_a_long_master_password_is_left_right_after_a_derivation(leng
     pieces = [needle for needle in key_needles(document) if needle["label"].startswith("master password, bytes")]
     assert sum(needle["length"] for needle in pieces) == length and all(needle["recorded"] for needle in pieces)
     assert len(pieces) >= length // 64 and [needle["length"] for needle in pieces[-32:]] == [16] * 32
-    assert [label for label in found_labels(document) if label not in ARGON2_INPUT] == []
-    assert_argon2_input_copies_are_in_system_malloc(document)
+    assert leftovers(document) == []
     dropped = [needle for needle in document["needles"] if needle["kind"] == "control-dropped"]
     assert len(dropped) == 1 and dropped[0]["hits"]
 
@@ -389,6 +378,7 @@ def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_writ
 
     monkeypatch.setattr(crypto, "Argon2id", spying(crypto.Argon2id))
     monkeypatch.setattr(crypto, "HKDF", spying(crypto.HKDF))
+    monkeypatch.setattr(crypto, "_stretch_in_child", lambda *arguments: False)  # Argon2id as it runs in this process
     salt = bytes(range(16))
     with SecureBuffer.from_buffer(b"a test password") as password:
         with crypto.argon2id(password, salt, crypto.Argon2Params(memory_kib=19 * 1024)) as stretched:
@@ -405,6 +395,59 @@ def test_boundary_argon2id_and_hkdf_are_handed_irondomes_locked_buffers_and_writ
                     assert bytes(material) == bytes(source.view()) and bytes(buffer) == bytes(out.view())
                 expected = HKDF(algorithm=hashes.SHA256(), length=32, salt=salt, info=b"irondome/test")
                 assert bytes(derived.view()) == expected.derive(bytes(stretched.view()))
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="there is no fork on this system")
+def test_the_key_from_the_child_that_runs_argon2id_is_read_straight_into_a_locked_buffer(monkeypatch):
+    """Between the two processes nothing is made that IronDome cannot wipe.
+
+    The password goes into the pipe from the locked buffer it is in, as a view
+    of that memory; the key comes out of the pipe into the locked buffer that
+    is returned, with ``readv``, which fills memory it is given. ``os.read``
+    would return the key as ``bytes``, which nothing can overwrite: it is not
+    called at all.
+    """
+    from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
+
+    from irondome import crypto
+    from irondome.secmem import SecureBuffer
+
+    parent = os.getpid()
+    written: List[Any] = []
+    filled: List[Any] = []
+    real_write, real_readv = os.write, os.readv
+
+    def write(descriptor: int, data: Any) -> int:
+        if os.getpid() == parent:
+            written.append(data)
+        return real_write(descriptor, data)
+
+    def readv(descriptor: int, buffers: Any) -> int:
+        if os.getpid() == parent:
+            filled.extend(buffers)
+        return real_readv(descriptor, buffers)
+
+    def read(*arguments: Any) -> bytes:
+        raise AssertionError("os.read returns what it read as immutable bytes")
+
+    monkeypatch.setattr(os, "write", write)
+    monkeypatch.setattr(os, "readv", readv)
+    monkeypatch.setattr(os, "read", read)
+    salt = bytes(range(16))
+    try:
+        with SecureBuffer.from_buffer(b"a test password") as password:
+            with crypto.argon2id(password, salt, crypto.Argon2Params(memory_kib=19 * 1024)) as stretched:
+                monkeypatch.undo()
+                expected = Argon2id(salt=salt, length=32, iterations=3, lanes=4, memory_cost=19 * 1024)
+                assert bytes(stretched.view()) == expected.derive(b"a test password")
+                assert [type(data) for data in written] == [memoryview]
+                assert bytes(written[0]) == b"a test password"
+                assert filled and all(type(target) is memoryview and not target.readonly for target in filled)
+                assert bytes(filled[0]) == bytes(stretched.view())  # the same memory, not a copy of it
+                stretched.view()[0] ^= 0xFF
+                assert bytes(filled[0]) == bytes(stretched.view())
+    finally:
+        monkeypatch.undo()
 
 
 def test_normalising_a_non_ascii_password_leaves_no_str_copy_of_it(derivation):

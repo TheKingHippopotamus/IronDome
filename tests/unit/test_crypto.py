@@ -824,7 +824,7 @@ def test_random_bytes(length):
         assert first != second
 
 
-def test_argon2id_is_run_again_on_zeros_even_when_the_derivation_fails(monkeypatch):
+def test_where_argon2id_runs_in_this_process_it_is_run_again_on_zeros_even_when_the_derivation_fails(monkeypatch):
     """The library copies the password before it can fail (too little memory for the cost): the second run,
     which gets that copy overwritten, follows a failed derivation too, and its own failure changes nothing."""
     from irondome import crypto
@@ -844,6 +844,7 @@ def test_argon2id_is_run_again_on_zeros_even_when_the_derivation_fails(monkeypat
             raise RuntimeError("the second run fails as well")
 
     monkeypatch.setattr(crypto, "Argon2id", Fake)
+    monkeypatch.setattr(crypto, "_stretch_in_child", lambda *arguments: False)  # this is about the run made here
     salt = bytes(range(16))
     with SecureBuffer.from_buffer(b"a test password") as password:
         with pytest.raises(VaultError, match="not enough memory to stretch the password"):
@@ -852,3 +853,235 @@ def test_argon2id_is_run_again_on_zeros_even_when_the_derivation_fails(monkeypat
     assert first.material == b"a test password" and first.settings["salt"] == salt
     assert second.material == bytes(len(b"a test password")) and second.settings["salt"] == bytes(16)
     assert second.settings["iterations"] == 1 and second.settings["memory_cost"] == 8 * second.settings["lanes"]
+
+
+# ---- Argon2id in a child process: the copy the library leaves of its input ends with the child ------------
+
+needs_fork = pytest.mark.skipif(not hasattr(os, "fork"), reason="there is no fork on this system")
+
+
+def _open_descriptors() -> int:
+    count = 0
+    for descriptor in range(256):
+        try:
+            os.fstat(descriptor)
+            count += 1
+        except OSError:
+            pass
+    return count
+
+
+def _no_child_is_left() -> bool:
+    try:
+        os.waitpid(-1, os.WNOHANG)
+    except ChildProcessError:
+        return True
+    return False
+
+
+@pytest.fixture
+def stretched_here(monkeypatch):
+    """What the derivation gives when it is made in this process, and proof that the next one is not."""
+    salt, password = bytes(range(16)), b"correct horse battery staple"
+    expected = Argon2id(salt=salt, length=32, iterations=2, lanes=1, memory_cost=19 * 1024).derive(password)
+    here = []
+    real = crypto._stretch_here
+    monkeypatch.setattr(crypto, "_stretch_here", lambda *arguments: (here.append(1), real(*arguments))[1])
+    return salt, password, expected, here
+
+
+@needs_fork
+def test_argon2id_runs_in_a_child_and_the_key_is_the_one_argon2id_gives(monkeypatch, stretched_here):
+    salt, password, expected, here = stretched_here
+    before = _open_descriptors()
+    runs = []
+    real = crypto._derive
+    monkeypatch.setattr(crypto, "_derive", lambda *arguments: (runs.append(os.getpid()), real(*arguments))[1])
+
+    with SecureBuffer.from_buffer(password) as locked, argon2id(locked, salt, SMALL) as key:
+        assert bytes(key.view()) == expected
+
+    assert runs == [] and here == []  # Argon2id ran, and not in this process: a child's list is its own
+    assert _open_descriptors() == before and _no_child_is_left()
+
+
+@needs_fork
+@pytest.mark.parametrize("length", [1, 32, 511, 513, 4096, 70_000])
+def test_a_password_of_any_length_reaches_the_child_whole(length):
+    """Longer than a pipe takes in one write, longer than a pipe holds: the child still stretches all of it."""
+    password = bytes((index * 7 + 3) % 251 for index in range(length))
+    salt = bytes(range(16, 32))
+    expected = Argon2id(salt=salt, length=32, iterations=2, lanes=1, memory_cost=19 * 1024).derive(password)
+
+    with SecureBuffer.from_buffer(password) as locked, argon2id(locked, salt, SMALL) as key:
+        assert bytes(key.view()) == expected
+    assert _no_child_is_left()
+
+
+@needs_fork
+def test_with_another_thread_running_argon2id_runs_here_and_gives_the_same_key(stretched_here):
+    import threading
+
+    salt, password, expected, here = stretched_here
+    release = threading.Event()
+    other = threading.Thread(target=release.wait, daemon=True)
+    other.start()
+    try:
+        with argon2id(password, salt, SMALL) as key:
+            assert bytes(key.view()) == expected
+    finally:
+        release.set()
+        other.join()
+    assert here == [1]
+
+
+@needs_fork
+@pytest.mark.parametrize("failing", ["fork", "pipe"])
+def test_where_the_system_refuses_a_child_argon2id_runs_here_and_no_descriptor_is_left_open(
+    monkeypatch, stretched_here, failing
+):
+    salt, password, expected, here = stretched_here
+    before = _open_descriptors()
+    made = []
+    real_pipe = os.pipe
+
+    def refused(*arguments):
+        raise OSError(35, "Resource temporarily unavailable")
+
+    def second_pipe_refused():
+        if made:
+            refused()
+        made.append(real_pipe())
+        return made[-1]
+
+    if failing == "fork":
+        monkeypatch.setattr(os, "fork", refused)
+    else:
+        monkeypatch.setattr(os, "pipe", second_pipe_refused)
+
+    with argon2id(password, salt, SMALL) as key:
+        assert bytes(key.view()) == expected
+    monkeypatch.undo()
+    assert here == [1] and _open_descriptors() == before
+
+
+def _child_that(action):
+    """A stand-in for the derivation that runs only in the child (the parent never calls it)."""
+
+    def derive(kdf, view, out):
+        action()
+
+    return derive
+
+
+@needs_fork
+@pytest.mark.parametrize(
+    ("what", "message"),
+    [
+        ("memory", "not enough memory to stretch the password: Argon2id is set to use 19 MiB"),
+        ("killed", "not enough memory to stretch the password"),  # what the kernel does to a process it cannot feed
+        ("terminated", "the process running Argon2id was ended by signal 15"),
+        ("error", "the process running Argon2id ended with status 4"),
+        ("exit", "the process running Argon2id ended with status 4"),
+    ],
+)
+def test_a_child_that_does_not_finish_is_reported_and_no_key_is_returned(monkeypatch, what, message):
+    import signal
+
+    def memory():
+        raise MemoryError
+
+    def error():
+        raise RuntimeError("something in the library")
+
+    def leave():
+        raise SystemExit(0)  # even this is not taken for success: no key was sent
+
+    actions = {
+        "memory": memory,
+        "killed": lambda: os.kill(os.getpid(), signal.SIGKILL),
+        "terminated": lambda: (signal.signal(signal.SIGTERM, signal.SIG_DFL), os.kill(os.getpid(), signal.SIGTERM)),
+        "error": error,
+        "exit": leave,
+    }
+    before = _open_descriptors()
+    wiped = []
+    real_wipe = SecureBuffer.wipe
+    monkeypatch.setattr(SecureBuffer, "wipe", lambda self: (wiped.append(len(self)), real_wipe(self))[1])
+    monkeypatch.setattr(crypto, "_derive", _child_that(actions[what]))
+
+    with pytest.raises(VaultError, match=message):
+        argon2id(b"correct horse battery staple", bytes(16), SMALL)
+
+    monkeypatch.undo()
+    assert 32 in wiped  # the buffer the key would have been in
+    assert _open_descriptors() == before and _no_child_is_left()
+
+
+@needs_fork
+def test_a_child_that_sends_only_part_of_a_key_is_not_believed(monkeypatch):
+    real_write = os.write
+
+    def half(kdf, view, out):
+        # Runs in the child only, so the os.write replaced here is the child's own.
+        os.write = lambda descriptor, data: real_write(descriptor, bytes(data)[:16])  # type: ignore[assignment]
+
+    monkeypatch.setattr(crypto, "_derive", half)
+
+    with pytest.raises(VaultError, match="the password was not stretched: the process running Argon2id ended"):
+        argon2id(b"correct horse battery staple", bytes(16), SMALL)
+    assert os.write is real_write and _no_child_is_left()
+
+
+@needs_fork
+def test_an_interrupt_while_the_child_works_ends_the_child_and_leaves_nothing_open(monkeypatch, tmp_path):
+    import time
+
+    before = _open_descriptors()
+    parent = os.getpid()
+    alive = tmp_path / "child"
+
+    def working(kdf, view, out):
+        alive.write_text(str(os.getpid()))
+        time.sleep(120)
+
+    real_read = crypto._read_exactly
+
+    def interrupted(descriptor, target):
+        if os.getpid() != parent:
+            return real_read(descriptor, target)  # the child reads the password as it always does
+        while not alive.exists():
+            time.sleep(0.01)
+        raise KeyboardInterrupt  # Ctrl-C while the parent waits for the key
+
+    monkeypatch.setattr(crypto, "_derive", working)
+    monkeypatch.setattr(crypto, "_read_exactly", interrupted)
+    started = time.monotonic()
+
+    with pytest.raises(KeyboardInterrupt):
+        argon2id(b"correct horse battery staple", bytes(16), SMALL)
+
+    monkeypatch.undo()
+    assert time.monotonic() - started < 60
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(alive.read_text()), 0)  # the child was ended and reaped, not left to finish
+    assert _open_descriptors() == before and _no_child_is_left()
+
+
+@needs_fork
+def test_a_library_that_cannot_do_argon2id_says_so_in_this_process_before_any_child_is_made(monkeypatch):
+    forked = []
+    real_fork = os.fork
+
+    class Unsupported(Exception):
+        pass
+
+    def refusing(**settings):
+        raise Unsupported("this build of the library has no Argon2id")
+
+    monkeypatch.setattr(os, "fork", lambda: (forked.append(1), real_fork())[1])
+    monkeypatch.setattr(crypto, "Argon2id", refusing)
+
+    with pytest.raises(Unsupported, match="has no Argon2id"):
+        argon2id(b"correct horse battery staple", bytes(16), SMALL)
+    assert forked == []

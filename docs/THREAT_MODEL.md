@@ -72,8 +72,8 @@ two parts.
 holds key material only in memory outside the Python heap, locked into RAM
 where the system allows it, and wipes it when the command
 finishes (Argon2id inside `cryptography` copies what it is given, which is a
-prehash and never the master password; that copy is overwritten afterwards,
-best effort: see the limits below). IronDome
+prehash and never the master password; it runs in a child process, and that
+copy ends with the child: see the limits below). IronDome
 turns off core dumps for itself, and on Linux marks itself non-dumpable so
 other processes of the same user cannot attach to it or read its memory
 (claim [`process-hardened`](CLAIMS.md#process-hardened); `IRONDOME_DEBUG=1`
@@ -250,14 +250,19 @@ with the old key and shows what it held then.
   secret). Whoever reads it and has the keyslot's salt from the vault file
   can also test guesses of the password against it at the speed of SHA-256,
   with no device and no TPM counting wrong guesses, and a password found
-  that way opens whatever it protects. IronDome cannot prevent that copy and does not
-  write to the library's memory itself: it runs Argon2id a second time on
-  zeros, and the library, asking for blocks of the same sizes, is handed the
-  ones it just freed and overwrites the copy. That is the allocator's
-  choice, not a guarantee: the tests find no copy left on Linux with glibc;
-  macOS zeroes small freed blocks by default, and with that zeroing turned
-  off its allocator does not hand the block back and the copy of the prehash
-  is usually found. A copy that is left lasts until that memory is reused.
+  that way opens whatever it protects. IronDome cannot prevent that copy and
+  does not write to the library's memory itself: it has Argon2id run in a
+  child process made for that one derivation. The child is sent the prehash
+  through a pipe, sends back the key and exits, and the copy ends with its
+  memory. While the derivation runs, the child holds the prehash and the key
+  outside locked pages. Where no child can be made (another thread is
+  running in the process, the system refuses to fork, or there is no fork),
+  Argon2id runs in IronDome's own process and is run a second time on zeros
+  so that the library may overwrite the copy with the blocks it is handed
+  back. That is the allocator's choice, not a guarantee: glibc was measured
+  to do it; macOS's allocator, where it does not zero what it frees (macOS
+  15 as GitHub runs it), left the copy in most runs. None of IronDome's own
+  commands stretches a password with a second thread running.
   Of an ASCII master password itself the tests find nothing after a
   derivation, whole or in part, up to 4,000 bytes. HKDF leaves its working keys, the one it extracts
   and the one it derives, on the C stack and in freed memory; IronDome

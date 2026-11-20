@@ -64,7 +64,7 @@ from irondome import __version__, audit, caps, crypto, keys, memscan, nuke, otp,
 from irondome import device as devices
 from irondome.device.base import POLICY_BIOMETRY, POLICY_DEVICE
 from irondome.errors import AuthError, HardwareError, IronDomeError, PolicyError, UsageError, VaultError
-from irondome.secmem import SecureBuffer, _wipe_str, read_secret_from_fd, wipe_bytes
+from irondome.secmem import SecureBuffer, _wipe_str, as_view, read_secret_from_fd, wipe_bytes
 from irondome.vault import Secret, Vault, VaultFile
 
 __all__ = [
@@ -2431,7 +2431,13 @@ def _probe_kdf(
     live[0] = password
     live[1] = keys.normalise_password(password)
     live[2] = crypto.hkdf(live[1], keys._LABEL_PASSWORD, salt)
-    live[3] = crypto.argon2id(live[1] if direct else live[2], salt, params)
+    if direct:
+        # The control has to leave the library's copy where the search can see it: in this process, which is
+        # where Argon2id ran before the work was given to a child.
+        live[3] = SecureBuffer(crypto.KEY_LEN)
+        crypto._stretch_here(as_view(live[1]), salt, params, live[3])
+    else:
+        live[3] = crypto.argon2id(live[2], salt, params)
     live[4] = crypto.hkdf(live[3], _KDF_INFO, salt)
     if not twice:
         table.add(live[1], _LABEL_NORMALISED)

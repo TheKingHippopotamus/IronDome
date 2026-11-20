@@ -330,9 +330,17 @@ machine; two things were the product's:
   every-user write permission and another owner are refused as before, and
   the message says which of the three it was.
 
-Still open from those runs: on macOS 15 the copy of the Argon2id input that
-`lock` overwrites was found in freed memory in about half the runs, which
-is the limit stated under "Still true", met on a real machine.
+- **On macOS 15 a copy of the prehash of the master password stayed in
+  memory after `lock`, in about half the runs.** Argon2id inside
+  `cryptography` copies what it is given and frees the copy unwiped;
+  IronDome had it overwritten by running Argon2id again on zeros, which
+  works only when the allocator hands the same block back. That was a
+  stated limit, said to need macOS's zeroing of freed memory turned off;
+  GitHub's macOS 15 machines behaved that way as they are. Argon2id now runs in a child process made for the one
+  derivation: it is sent the prehash through a pipe, sends the key back and
+  exits, and the copy ends with it, whatever the allocator. Measured on a
+  Mac with zeroing off: the copy was left in 7 of 10 derivations before;
+  after, in none of 20, and in none of 6 whole sessions ending in `lock`.
 
 ### Added
 
@@ -444,7 +452,7 @@ is the limit stated under "Still true", met on a real machine.
 No independent audit. Decrypted entries are ordinary Python strings while a
 command runs. Argon2id inside `cryptography` leaves a copy of what it is
 given: that is a prehash of the master password, never the password, and
-IronDome gets the copy overwritten by deriving again from zeros, best effort. Intel Macs are untested, and installing
+it is left in a child process that exits when the key is made. Intel Macs are untested, and installing
 there builds `cryptography` from source. A recovery key, and a portable backup made with
 `irondome export`, outlive `nuke`. Whole-file rollback is not detected. A
 grant's use count and a revoke rest on deleting its file, so a copy of the

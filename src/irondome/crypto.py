@@ -19,6 +19,8 @@ from __future__ import annotations
 import base64
 import binascii
 import os
+import signal
+import threading
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -155,17 +157,23 @@ def default_argon2() -> Argon2Params:
     return DEFAULT_ARGON2
 
 
+#: How the child that runs Argon2id says what happened, as its exit status.
+_CHILD_DONE, _CHILD_NO_MEMORY, _CHILD_FAILED = 0, 3, 4
+
+
 def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureBuffer:
     """Stretch *password* into a 32-byte key, written straight into locked memory.
 
     pyca/cryptography copies the password it is given into memory it frees
-    without overwriting. IronDome cannot reach that copy safely, so it has the
-    library overwrite it: Argon2id is run once more from this same frame, at
-    the lowest cost there is, with an all-zero password and salt of the same
-    lengths. The second run asks the allocator for blocks of the same sizes
-    in the same order and is handed the ones just freed. That is the
-    allocator's choice, not a guarantee: see the boundary of the keys-wiped
-    claim for where it is checked.
+    without overwriting, and IronDome cannot reach that copy. So the
+    derivation is not run in this process: a forked child is sent the
+    password through a pipe, runs Argon2id, sends the key back and exits, and
+    the copy ends with the child's memory. That does not depend on how the
+    allocator reuses what is freed.
+
+    Where no child can be made (another thread is running, the system refuses
+    to fork, or there is no ``fork``), Argon2id runs here and the copy is
+    overwritten as well as it can be: see :func:`_stretch_here`.
     """
     params.validate()
     if len(salt) < SALT_LEN:
@@ -173,33 +181,149 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
     view = as_view(password)
     out = SecureBuffer(KEY_LEN)
     try:
-        kdf = Argon2id(
-            salt=salt,
-            length=KEY_LEN,
-            iterations=params.iterations,
-            lanes=params.lanes,
-            memory_cost=params.memory_kib,
-        )
-        try:
-            kdf.derive_into(view, out.view())  # type: ignore[arg-type, unused-ignore]  # any buffer is accepted
-        except MemoryError:
-            raise VaultError(
-                f"not enough memory to stretch the password: Argon2id is set to use {params.memory_kib // 1024} MiB "
-                "and this machine would not give it that much. Free some memory and try again; for a new vault or "
-                "backup, IRONDOME_KDF_MEMORY_MIB sets a lower cost"
-            ) from None
-        finally:
-            # Also when the derivation failed (too little memory for its cost): the copy was made before that.
-            try:
-                again = Argon2id(salt=bytes(len(salt)), length=KEY_LEN, iterations=1, lanes=params.lanes,
-                                 memory_cost=8 * params.lanes)
-                again.derive_into(bytes(len(view)), bytearray(KEY_LEN))
-            except Exception:  # noqa: S110 - a refused second run must not change what the first one did
-                pass
+        if not _stretch_in_child(view, salt, params, out):
+            _stretch_here(view, salt, params, out)
     except BaseException:
         out.wipe()
         raise
     return out
+
+
+def _no_memory(params: Argon2Params) -> VaultError:
+    return VaultError(
+        f"not enough memory to stretch the password: Argon2id is set to use {params.memory_kib // 1024} MiB "
+        "and this machine would not give it that much. Free some memory and try again; for a new vault or "
+        "backup, IRONDOME_KDF_MEMORY_MIB sets a lower cost"
+    )
+
+
+def _kdf(salt: bytes, params: Argon2Params) -> Argon2id:
+    return Argon2id(
+        salt=salt,
+        length=KEY_LEN,
+        iterations=params.iterations,
+        lanes=params.lanes,
+        memory_cost=params.memory_kib,
+    )
+
+
+def _derive(kdf: Argon2id, view: Any, out: Any) -> None:
+    kdf.derive_into(view, out)  # any buffer is accepted
+
+
+def _stretch_here(view: Any, salt: bytes, params: Argon2Params, out: SecureBuffer) -> None:
+    """Argon2id in this process, for where there can be no child.
+
+    The copy the library makes of its input stays in this process. IronDome
+    has the library overwrite it: Argon2id is run once more from this same
+    frame, at the lowest cost there is, with an all-zero password and salt of
+    the same lengths. The second run asks the allocator for blocks of the
+    same sizes in the same order and may be handed the ones just freed. That
+    is the allocator's choice, not a guarantee: glibc was measured to do it,
+    macOS's allocator, where it does not zero what is freed, mostly not.
+    """
+    kdf = _kdf(salt, params)
+    try:
+        _derive(kdf, view, out.view())
+    except MemoryError:
+        raise _no_memory(params) from None
+    finally:
+        # Also when the derivation failed (too little memory for its cost): the copy was made before that.
+        try:
+            again = Argon2id(salt=bytes(len(salt)), length=KEY_LEN, iterations=1, lanes=params.lanes,
+                             memory_cost=8 * params.lanes)
+            again.derive_into(bytes(len(view)), bytearray(KEY_LEN))
+        except Exception:  # noqa: S110 - a refused second run must not change what the first one did
+            pass
+
+
+def _read_exactly(descriptor: int, target: Any) -> int:
+    """Fill the writable buffer *target* from *descriptor*, with no copy in between; how many bytes arrived."""
+    got = 0
+    while got < len(target):
+        count = os.readv(descriptor, [target[got:]])
+        if not count:
+            break
+        got += count
+    return got
+
+
+def _stretch_in_child(view: Any, salt: bytes, params: Argon2Params, out: SecureBuffer) -> bool:
+    """Run Argon2id in a forked child and read the key into *out*. ``False``: no child was made.
+
+    The child gets the password through a pipe, not through the memory it
+    inherits: on Linux a locked buffer reads as zeros in a child. It answers
+    with the 32 bytes of the key and an exit status, touches nothing else and
+    leaves with ``os._exit``, so nothing of this process is flushed, closed
+    or cleaned up twice. Only a process with a single thread forks: a child
+    of a threaded one can wait for ever for a lock some other thread held.
+    The library is asked for Argon2id before the fork, so that a library
+    that cannot do it says so here, in its own words.
+    """
+    if not hasattr(os, "fork") or not hasattr(os, "readv") or threading.active_count() != 1:
+        return False
+    kdf = _kdf(salt, params)
+    length = len(view)
+    to_child = from_child = (-1, -1)
+    try:
+        to_child = os.pipe()
+        from_child = os.pipe()
+        child = os.fork()
+    except OSError:
+        for descriptor in (*to_child, *from_child):
+            if descriptor >= 0:
+                os.close(descriptor)
+        return False
+    if child == 0:
+        status = _CHILD_FAILED
+        try:
+            os.close(to_child[1])
+            os.close(from_child[0])
+            password = bytearray(length)
+            if _read_exactly(to_child[0], memoryview(password)) == length:
+                key = bytearray(KEY_LEN)
+                _derive(kdf, password, key)
+                os.write(from_child[1], key)
+                status = _CHILD_DONE
+        except MemoryError:
+            status = _CHILD_NO_MEMORY
+        except BaseException:  # noqa: S110 - whatever it was, the status says it and the parent reports it
+            pass
+        finally:
+            os._exit(status)
+    reaped = False
+    try:
+        os.close(to_child[0])
+        os.close(from_child[1])
+        to_child, from_child = (-1, to_child[1]), (from_child[0], -1)
+        try:
+            sent = 0
+            while sent < length:
+                sent += os.write(to_child[1], view[sent:])
+        except BrokenPipeError:
+            pass  # the child is gone; its status below says why
+        os.close(to_child[1])
+        to_child = (-1, -1)
+        got = _read_exactly(from_child[0], out.view())
+        _, raw = os.waitpid(child, 0)
+        reaped = True
+    finally:
+        for descriptor in (*to_child, *from_child):
+            if descriptor >= 0:
+                os.close(descriptor)
+        if not reaped:  # interrupted while the child was still at work
+            try:
+                os.kill(child, signal.SIGKILL)
+                os.waitpid(child, 0)
+            except OSError:
+                pass
+    status = os.waitstatus_to_exitcode(raw)
+    if status == _CHILD_DONE and got == KEY_LEN:
+        return True
+    if status in (_CHILD_NO_MEMORY, -signal.SIGKILL):  # the kernel kills the process it cannot give memory to
+        raise _no_memory(params)
+    how = f"was ended by signal {-status}" if status < 0 else f"ended with status {status}"
+    raise VaultError(f"the password was not stretched: the process running Argon2id {how}")
 
 
 # ---------------------------------------------------------------------------

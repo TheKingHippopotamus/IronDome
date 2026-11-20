@@ -16,7 +16,8 @@ memory), and Argon2id stretches those: the *prehash*. Argon2id in
 pyca/cryptography (OpenSSL) copies whatever it is given into memory it frees
 without overwriting; this way that copy is of 32 bytes that stand in for the
 password at this one keyslot, never of the password itself, which a person
-may use elsewhere too. See :func:`stretch_password`.
+may use elsewhere too. And it is made in a child process that exits once the
+key is derived (:func:`irondome.crypto.argon2id`). See :func:`stretch_password`.
 
 A **password slot** needs both factors. The device secret comes from a
 :mod:`irondome.device` backend (Secure Enclave, TPM 2.0, or a file where there
@@ -358,11 +359,13 @@ def stretch_password(secret: BufferLike, salt: bytes, params: Argon2Params) -> S
     The first step costs nothing to an attacker and is not there for strength:
     Argon2id does all the stretching. It is there for what stays in memory.
     Argon2id in pyca/cryptography copies its input into memory it frees
-    without overwriting, and :func:`irondome.crypto.argon2id` can only get that
-    block overwritten when the allocator hands it back, which it was measured
-    not to do for the tail of an input longer than about 650 bytes. HKDF reads
-    the password a block at a time and was found to leave no copy of it at any
-    length. So the only input Argon2id ever copies is 32 bytes long.
+    without overwriting. :func:`irondome.crypto.argon2id` runs it in a child
+    process, where that copy ends with the child; where it has to run it in
+    this process it can only get the block overwritten when the allocator
+    hands it back, which it was measured not to do for the tail of an input
+    longer than about 650 bytes. HKDF reads the password a block at a time
+    and was found to leave no copy of it at any length. So the only input
+    Argon2id ever copies, in either process, is 32 bytes long.
 
     The prehash is as secret as the password is for this one slot: it opens
     the slot as the password would, and whoever reads it and knows the salt,
