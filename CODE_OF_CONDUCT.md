@@ -20,7 +20,7 @@ We pledge to make participation in IronDome a harassment-free experience for eve
 
 ## Enforcement
 
-Instances of unacceptable behavior may be reported to [@TheKingHippopotamus](https://github.com/TheKingHippopotamus). All complaints will be reviewed and investigated.
+Instances of unacceptable behavior may be reported to [@Nir-Ghub](https://github.com/Nir-Ghub). All complaints will be reviewed and investigated.
 
 Project maintainers have the right to remove, edit, or reject comments, commits, code, issues, and other contributions that violate this Code of Conduct.
 

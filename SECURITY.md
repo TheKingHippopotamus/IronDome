@@ -16,7 +16,7 @@ discussion.
 
 Report it privately through GitHub's private vulnerability reporting for this
 repository:
-<https://github.com/TheKingHippopotamus/IronDome-Bunker/security/advisories/new>
+<https://github.com/Nir-Ghub/IronDome/security/advisories/new>
 
 Only you and the repository's maintainers can see the report until an
 advisory is published. If that page shows no report form, private reporting

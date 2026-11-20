@@ -3,7 +3,7 @@
 Thank you for looking. Bug reports, tests, documentation fixes and code are
 all welcome, and a small pull request that does one thing is the easiest kind
 to review. Questions and bugs go to the
-[issue tracker](https://github.com/TheKingHippopotamus/IronDome-Bunker/issues).
+[issue tracker](https://github.com/Nir-Ghub/IronDome/issues).
 Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 IronDome is a security tool, so the bar for a change is simple to state: it
@@ -21,8 +21,8 @@ You need [uv](https://docs.astral.sh/uv/) 0.13.4 or newer (`uv --version`).
 Python 3.9.2 or newer from your machine, or downloads one.
 
 ```console
-$ git clone https://github.com/TheKingHippopotamus/IronDome-Bunker.git
-$ cd IronDome-Bunker
+$ git clone https://github.com/Nir-Ghub/IronDome.git
+$ cd IronDome
 $ uv sync --locked --extra dev
 ```
 

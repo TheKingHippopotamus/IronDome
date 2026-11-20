@@ -332,7 +332,7 @@ Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
 ## License
 
-[GPL-3.0-only](LICENSE). Copyright (C) 2023-2026 [King Hippopotamus](https://github.com/TheKingHippopotamus).
+[GPL-3.0-only](LICENSE). Copyright (C) 2023-2026 [King Hippopotamus](https://github.com/Nir-Ghub).
 
 The passphrase word list, `src/irondome/data/eff_large_wordlist.txt`, is not
 IronDome's and is not under the GPL: it is the EFF Large Wordlist by Joseph

@@ -8,7 +8,7 @@ body:
         **Never paste a session or grant token, a recovery key, a master password, a TOTP seed, or any file from a bunker (`vault.irondome`, `backups/`, `caps/`, `audit.log`). This issue is public. Editing it afterwards does not take a secret back: notification emails have already gone out.**
         If one was posted anywhere, treat it as exposed: revoke the grant or end the session (`irondome lock --all`), and change the secret it protects.
 
-        **Security problem? Do not open an issue.** Report it privately: <https://github.com/TheKingHippopotamus/IronDome-Bunker/security/advisories/new> (see [SECURITY.md](https://github.com/TheKingHippopotamus/IronDome-Bunker/blob/main/SECURITY.md)). Anything that makes a statement in [docs/CLAIMS.md](https://github.com/TheKingHippopotamus/IronDome-Bunker/blob/main/docs/CLAIMS.md) false counts, whatever its severity.
+        **Security problem? Do not open an issue.** Report it privately: <https://github.com/Nir-Ghub/IronDome/security/advisories/new> (see [SECURITY.md](https://github.com/Nir-Ghub/IronDome/blob/main/SECURITY.md)). Anything that makes a statement in [docs/CLAIMS.md](https://github.com/Nir-Ghub/IronDome/blob/main/docs/CLAIMS.md) false counts, whatever its severity.
 
   - type: checkboxes
     id: not-security
