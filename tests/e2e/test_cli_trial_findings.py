@@ -182,6 +182,7 @@ def test_run_says_what_an_env_file_it_was_not_given_supplies(cli: CLI, tmp_path)
     (tmp_path / "repo" / ".env.irondome").write_text(
         "STRIPE_KEY=irondome://STRIPE_KEY\nOTHER_KEY=irondome://OTHER_KEY\n"
     )
+    (tmp_path / "repo" / ".env.irondome").chmod(0o644)  # whatever the umask of the machine the tests run on
     ran = ok(cli("run", "--cwd", str(tmp_path / "repo"), "--password-stdin", "--", "/usr/bin/true",
                  stdin=PASSWORD + "\n"))
     assert "found in the working directory (from the vault, each under its own name: OTHER_KEY, STRIPE_KEY)" in (

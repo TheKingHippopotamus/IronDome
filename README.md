@@ -218,7 +218,8 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
   on purpose gets it through, as does an encoding that is not on the list;
   a `--reveal` grant or an entry marked `--agent reveal` lets an agent see
   the value. `irondome run` reads `.env.irondome` in the directory it runs
-  in without being asked and lists what the file supplies, with `-q` too.
+  in without being asked and lists what the file supplies, with `-q` too,
+  and only if the file is yours and no other account can change it.
   Such a file may only ask for a secret under the name you gave it
   (`GITHUB_TOKEN=irondome://GITHUB_TOKEN`, as `--env GITHUB_TOKEN` does);
   one that sets anything as written, or points a variable at some other

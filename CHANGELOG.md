@@ -311,6 +311,29 @@ command in a pipeline); the product had refused, as its error line shows.
 Not covered by that run: adding or removing a fingerprint, the MCP server's
 reveal path, a vault with no master password at all, a locked screen.
 
+### Found by running it on machines it had not met
+
+Everything above was run on one Mac and in one Linux container on it. The
+suite then ran for the first time on GitHub's machines (Ubuntu 24.04 and
+macOS 15, six Python versions) and on a Debian 13 machine under an ordinary
+login. Most of what failed there was the tests' own assumptions about the
+machine; two things were the product's:
+
+- **With stdout or stderr closed (`>&-`), output could go into a file.**
+  Python leaves a closed stream as nothing, and a file opened later takes
+  its number. A closed stream now gets the null device, and what happens to
+  hold descriptor 1 or 2 is not written to.
+- **`.env.irondome` was refused on Debian and Ubuntu as soon as it was
+  written.** Each user there has a group of their own and new files are
+  writable by it, and `irondome run` refused any found file its group could
+  write. A group that only the user is in is now accepted; a shared group,
+  every-user write permission and another owner are refused as before, and
+  the message says which of the three it was.
+
+Still open from those runs: on macOS 15 the copy of the Argon2id input that
+`lock` overwrites was found in freed memory in about half the runs, which
+is the limit stated under "Still true", met on a real machine.
+
 ### Added
 
 - **Cryptography:** Argon2id (256 MiB, t=3, p=4 by default, 64 MiB on a

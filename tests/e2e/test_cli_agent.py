@@ -379,6 +379,7 @@ def test_run_finds_env_irondome_in_the_directory_the_command_runs_in(
     project = tmp_path / "project"
     project.mkdir()
     (project / ".env.irondome").write_text("STRIPE_KEY=irondome://STRIPE_KEY\n")
+    (project / ".env.irondome").chmod(0o644)  # whatever the umask of the machine the tests run on
     (tmp_path / "other.env").write_text("STRIPE_KEY=irondome://DB_URL\n")
     code = 'import os; print("cwd:", os.getcwd()); print("key:", os.environ.get("STRIPE_KEY"))'
 
@@ -409,7 +410,47 @@ def test_an_env_irondome_others_can_change_is_not_used(cli: Cli, vault_ready: No
 
     assert done.returncode == 2
     assert "was not used" in done.stderr and "--env-file" in done.stderr
+    assert "every user of this machine can change it" in done.stderr
     assert "report:" not in done.stdout
+
+
+def _the_tests_user_is_alone_in_its_group() -> bool:
+    """Read from the account databases by the test, not by the product: is this user's primary group a group of one."""
+    import grp
+    import pwd
+
+    user = pwd.getpwuid(os.geteuid())
+    others = [account for account in pwd.getpwall() if account.pw_gid == user.pw_gid and account.pw_uid != user.pw_uid]
+    return not others and set(grp.getgrgid(user.pw_gid).gr_mem) <= {user.pw_name}
+
+
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="POSIX ownership and permissions")
+def test_an_env_irondome_its_group_can_change_is_used_only_where_that_group_is_the_user_alone(
+    cli: Cli, vault_ready: None, tmp_path: Path
+) -> None:
+    """Mode 664 is what an editor and ``git clone`` write on Debian and Ubuntu, where the group has one member.
+
+    The same mode on a Mac, where every user is in ``staff``, lets other people write the file. This test takes
+    whichever branch the machine it runs on is; between a Mac and a Linux machine the gate runs both.
+    """
+    project = tmp_path / "project"
+    project.mkdir()
+    found = project / ".env.irondome"
+    found.write_text("STRIPE_KEY=irondome://STRIPE_KEY\n")
+    os.chown(found, -1, os.getegid())  # a directory can hand its own group to what is made in it (macOS, setgid)
+    found.chmod(0o664)
+
+    child = python('import os; print("got:", "STRIPE_KEY" in os.environ)')
+    done = as_owner(cli, "run", "--cwd", str(project), "--", *child)
+
+    if _the_tests_user_is_alone_in_its_group() and os.getegid() == os.getgid():
+        assert done.returncode == 0, done.stderr
+        assert "got: True" in done.stdout and ".env.irondome" in done.stderr
+    else:
+        assert done.returncode == 2, done.stderr
+        assert "was not used: the members of" in done.stderr and "can change it" in done.stderr
+        assert "chmod go-w" in done.stderr and "--env-file" in done.stderr
+        assert "got:" not in done.stdout
 
 
 def test_run_takes_var_equals_ref_a_bare_alias_and_percent_encoded_references(cli: Cli, vault_ready: None) -> None:

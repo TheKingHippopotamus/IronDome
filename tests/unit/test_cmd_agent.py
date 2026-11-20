@@ -308,3 +308,98 @@ def test_help_keeps_examples_whole_however_narrow_the_terminal(monkeypatch: pyte
     for line in (parser.description or "").splitlines() + (parser.epilog or "").splitlines():
         assert len(line) <= 79, line
     assert "!" not in text
+
+
+# ---- who else can change an env file that was found, not named --------------------------------------------
+
+
+def _accounts(monkeypatch: pytest.MonkeyPatch, *, users: Sequence[Tuple[str, int, int]],
+              groups: Dict[int, Tuple[str, List[str]]]) -> None:
+    """Stand-ins for the account databases: users as (name, uid, primary group), groups as gid -> (name, members)."""
+    by_uid: Dict[int, Any] = {}
+    listed = []
+    for name, uid, gid in users:
+        entry = types.SimpleNamespace(pw_name=name, pw_uid=uid, pw_gid=gid)
+        by_uid.setdefault(uid, entry)
+        listed.append(entry)
+
+    def getgrgid(gid: int) -> Any:
+        name, members = groups[gid]  # KeyError for an unknown group, as grp raises
+        return types.SimpleNamespace(gr_name=name, gr_mem=list(members))
+
+    monkeypatch.setitem(sys.modules, "pwd", types.SimpleNamespace(
+        getpwuid=lambda uid: by_uid[uid], getpwall=lambda: list(listed)))
+    monkeypatch.setitem(sys.modules, "grp", types.SimpleNamespace(getgrgid=getgrgid))
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+
+
+@pytest.mark.parametrize(
+    ("users", "groups", "alone", "why"),
+    [
+        ([("dana", 1000, 1000)], {1000: ("dana", [])}, True, "a group of one, as Debian makes it"),
+        ([("dana", 1000, 1000)], {1000: ("dana", ["dana"])}, True, "the user listed as its own member"),
+        ([("dana", 1000, 1000), ("d2", 1000, 1000)], {1000: ("dana", [])}, True, "two names of one account"),
+        ([("dana", 1000, 1000), ("omar", 1001, 1001)], {1000: ("dana", ["omar"])}, False, "another member"),
+        ([("dana", 1000, 1000), ("omar", 1001, 1000)], {1000: ("dana", [])}, False, "another account's primary"),
+        ([("dana", 1000, 20), ("omar", 1001, 20)], {20: ("staff", [])}, False, "a group every user is in"),
+        ([("dana", 1000, 1000)], {1000: ("dana", []), 50: ("empty", [])}, False, "not the user's own group"),
+        ([("dana", 1000, 1000)], {}, False, "a group that cannot be looked up"),
+        ([("omar", 1001, 1000)], {1000: ("dana", [])}, False, "a user with no account entry"),
+    ],
+)
+def test_a_group_is_the_users_alone_only_when_nobody_else_is_in_it(
+    monkeypatch: pytest.MonkeyPatch, users: Sequence[Tuple[str, int, int]],
+    groups: Dict[int, Tuple[str, List[str]]], alone: bool, why: str,
+) -> None:
+    _accounts(monkeypatch, users=users, groups=groups)
+    gid = 50 if 50 in groups else next(iter(groups), 1000)
+
+    assert cmd_agent._group_is_the_users_alone(gid) is alone, why
+
+
+def test_account_databases_that_cannot_be_read_count_as_somebody_else(monkeypatch: pytest.MonkeyPatch) -> None:
+    _accounts(monkeypatch, users=[("dana", 1000, 1000)], groups={1000: ("dana", [])})
+
+    def unreadable() -> List[Any]:
+        raise OSError("the directory service does not answer")
+
+    monkeypatch.setattr(sys.modules["pwd"], "getpwall", unreadable)
+
+    assert cmd_agent._group_is_the_users_alone(1000) is False
+
+
+@pytest.mark.parametrize(
+    ("uid", "gid", "mode", "reason"),
+    [
+        (1000, 1000, 0o600, None),
+        (1000, 1000, 0o644, None),
+        (1000, 1000, 0o664, None),  # the group is the user's alone: nobody else gains anything
+        (1000, 20, 0o644, None),  # a shared group that cannot write
+        (1000, 20, 0o664, "the members of the group staff can change it"),
+        (1000, 77, 0o664, "the members of group 77 can change it"),  # no such group: still named, still refused
+        (1000, 1000, 0o666, "every user of this machine can change it"),
+        (1000, 1000, 0o646, "every user of this machine can change it"),
+        (1001, 1000, 0o600, "it belongs to another user"),
+        (0, 0, 0o644, "it belongs to another user"),
+    ],
+)
+def test_who_else_can_change_a_file_is_said_by_name(
+    monkeypatch: pytest.MonkeyPatch, uid: int, gid: int, mode: int, reason: Optional[str]
+) -> None:
+    _accounts(
+        monkeypatch,
+        users=[("dana", 1000, 1000), ("omar", 1001, 20), ("root", 0, 0)],
+        groups={1000: ("dana", []), 20: ("staff", []), 0: ("root", [])},
+    )
+    info = types.SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=0o100000 | mode)
+
+    assert cmd_agent._who_else_can_change(info) == reason  # type: ignore[arg-type]
+
+
+def test_a_group_name_with_control_characters_is_escaped_in_the_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    _accounts(monkeypatch, users=[("dana", 1000, 1000)], groups={1000: ("dana", []), 9: ("x\x1b[2Jy", ["omar"])})
+    info = types.SimpleNamespace(st_uid=1000, st_gid=9, st_mode=0o100664)
+
+    reason = cmd_agent._who_else_can_change(info)  # type: ignore[arg-type]
+
+    assert reason is not None and "\x1b" not in reason and "\\x1b[2Jy" in reason

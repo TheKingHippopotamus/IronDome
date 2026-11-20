@@ -164,7 +164,11 @@ resets the counter at once, for you and for anyone else who can use the TPM:
 
 **`.env.irondome` is read without asking.** `irondome run` takes it from the
 directory the command runs in and says which variables it found there, with
-`-q` as well. A file nobody named may only ask for a secret under the name
+`-q` as well. It is used only if it is yours and nobody else can change it:
+a file that belongs to another user, or that every user or the members of
+its group can write, is refused with the reason. A group that only you are
+in counts as you; Debian, Ubuntu and Fedora give each user such a group and
+make new files writable by it. A file nobody named may only ask for a secret under the name
 you gave it: `NAME=irondome://NAME`, where `NAME` is an alias or an entry,
 which is what `--env NAME` does. Anything else is refused until you name the
 file with `--env-file`: a variable set as written can choose what code runs

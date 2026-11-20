@@ -164,6 +164,7 @@ def test_the_notice_about_a_found_env_file_is_printed_with_quiet_too(cli: CLI, t
     (tmp_path / "repo").mkdir()
     ok(cli("alias", "set", "STRIPE_KEY", "stripe", "--password-stdin", stdin=PASSWORD + "\n"))
     (tmp_path / "repo" / ".env.irondome").write_text("STRIPE_KEY=irondome://STRIPE_KEY\n")
+    (tmp_path / "repo" / ".env.irondome").chmod(0o644)  # whatever the umask of the machine the tests run on
     ran = ok(cli("-q", "run", "--cwd", str(tmp_path / "repo"), "--password-stdin", "--", "/usr/bin/true",
                  stdin=PASSWORD + "\n"))
     assert "found in the working directory (from the vault, each under its own name: STRIPE_KEY)" in ran.stderr
@@ -200,6 +201,7 @@ def test_a_found_env_file_may_only_ask_for_a_secret_under_its_own_name(cli: CLI,
         ("GH=irondome://gh\nSTRIPE=irondome://STRIPE_KEY/password", "GH, STRIPE"),
     ):
         (repo / ".env.irondome").write_text(f"STRIPE_KEY=irondome://STRIPE_KEY\n{planted}\n")
+        (repo / ".env.irondome").chmod(0o644)  # whatever the umask of the machine the tests run on
         refused = fails(cli("run", "--cwd", str(repo), "--password-stdin", "--", "/bin/sh", "-c", "make",
                             stdin=PASSWORD + "\n"), 2)
         assert f"sets {named} to something other than the secret you keep under that name" in refused.stderr

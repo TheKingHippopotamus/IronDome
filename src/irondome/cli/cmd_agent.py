@@ -307,6 +307,46 @@ def _alias_ls(ctx: Context, args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _group_is_the_users_alone(gid: int) -> bool:
+    """Whether the user running irondome is the only account in group *gid*.
+
+    Debian, Ubuntu, Fedora and their relatives give every user a group of their own and a umask of 002, so
+    every file an editor or ``git clone`` writes there can be changed by its group: a group of one. That is
+    the one case in which a group's write permission gives nobody else anything. It has to be the user's own
+    primary group, with no other member listed and no other account that has it as its primary group; a
+    group or an account that cannot be looked up counts as somebody else.
+    """
+    try:
+        import grp
+        import pwd
+
+        user = pwd.getpwuid(os.geteuid())
+        group = grp.getgrgid(gid)
+        accounts = pwd.getpwall()
+    except (ImportError, KeyError, OSError):
+        return False
+    if user.pw_gid != gid or any(member != user.pw_name for member in group.gr_mem):
+        return False
+    return all(account.pw_uid == user.pw_uid for account in accounts if account.pw_gid == gid)
+
+
+def _who_else_can_change(info: os.stat_result) -> Optional[str]:
+    """Who, besides the user running irondome, can change a file with this status; ``None`` for nobody."""
+    if info.st_uid != os.geteuid():
+        return "it belongs to another user"
+    if info.st_mode & stat.S_IWOTH:
+        return "every user of this machine can change it"
+    if info.st_mode & stat.S_IWGRP and not _group_is_the_users_alone(info.st_gid):
+        try:
+            import grp
+
+            group = f"the group {_printable(grp.getgrgid(info.st_gid).gr_name)}"
+        except (ImportError, KeyError, OSError):
+            group = f"group {info.st_gid}"
+        return f"the members of {group} can change it"
+    return None
+
+
 def _read_env_file(path: str, *, found: bool) -> str:
     """The text of an env file. *found*: it was picked up from the working directory, not named."""
     shown = scan.display_path(path)
@@ -320,12 +360,13 @@ def _read_env_file(path: str, *, found: bool) -> str:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise UsageError(f"the env file {shown} is not a regular file")
-        if found and hasattr(os, "geteuid") and (info.st_uid != os.geteuid() or info.st_mode & 0o022):
-            raise UsageError(
-                f"{shown} was not used: it belongs to another user or others can change it, so it could "
-                "name any of your secrets. Make it yours and not writable by others (chmod go-w), or name a "
-                "file with --env-file"
-            )
+        if found and hasattr(os, "geteuid"):
+            reason = _who_else_can_change(info)
+            if reason is not None:
+                raise UsageError(
+                    f"{shown} was not used: {reason}, so it could name any of your secrets. Make it yours "
+                    "and not writable by others (chmod go-w), or name a file with --env-file"
+                )
         parts = []
         size = 0
         while size <= _ENV_FILE_LIMIT:
