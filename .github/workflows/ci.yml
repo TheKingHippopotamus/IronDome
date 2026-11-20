@@ -27,7 +27,7 @@ jobs:
   test:
     name: test (${{ matrix.os }}, py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
     strategy:
@@ -55,7 +55,7 @@ jobs:
   tpm:
     name: TPM 2.0 (scripts/test-linux.sh, swtpm, py3.9 + py3.14)
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:

@@ -19,11 +19,12 @@ Python package name and every command changed. `irondome migrate` converts a
 3.x vault, verifies every entry and leaves the old vault untouched unless
 `--destroy-old` is given and every entry matched.
 
-**Published by hand.** GitHub Actions does not run on the maintainer's
-account, so neither the CI workflow nor the release workflow ran for this
-version: the gate was run on the maintainer's Mac, the files were built there
-and uploaded with a project token, and PyPI holds no provenance attestation
-for them. `SECURITY.md` says exactly what was run and how to check the files.
+**Published by hand.** The repository moved to its present home on the day of
+this release, before either workflow had completed a run there, so this
+version does not rest on them: the gate was run on the maintainer's Mac, the
+files were built there and uploaded with a project token, and PyPI holds no
+provenance attestation for them. `SECURITY.md` says exactly what was run and
+how to check the files.
 
 ### The five published limits, closed
 

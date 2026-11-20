@@ -160,10 +160,10 @@ uses them is in scope.
 
 ### How 4.0.0 itself was released
 
-Not through those workflows. GitHub Actions does not run on the maintainer's
-account (runs have stayed queued since at least September 2026), so for 4.0.0
-neither the CI workflow nor the release workflow ran. What was done in their
-place, on the maintainer's Mac:
+Not through those workflows. The repository moved to its present home on the
+day 4.0.0 was released, before either workflow had completed a run there, so
+4.0.0 does not rest on any run of them. What was done in their place, on the
+maintainer's Mac:
 
 * The complete gate, `scripts/check.sh --linux`, ran to its last line on the
   release commit: the whole suite on macOS on Python 3.9 and 3.14 with the
@@ -182,7 +182,7 @@ in the timestamps inside the archives and in nothing else. To check a file
 from PyPI against the source, build the tag with that recipe and compare the
 two archives member by member.
 
-A later release goes through the workflows again once they run; until then
-each release says here how it was made.
+A later release goes through the release workflow; until one has, each
+release says here how it was made.
 
 IronDome has not been audited by an independent party.
