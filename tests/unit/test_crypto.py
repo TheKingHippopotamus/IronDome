@@ -1085,3 +1085,195 @@ def test_a_library_that_cannot_do_argon2id_says_so_in_this_process_before_any_ch
     with pytest.raises(Unsupported, match="has no Argon2id"):
         argon2id(b"correct horse battery staple", bytes(16), SMALL)
     assert forked == []
+
+
+# ---------------------------------------------------------------------------
+# What a change of one line would have got past the tests above
+#
+# Each test here was written because a line of crypto.py could be changed, or
+# removed, with every other test still passing.
+# ---------------------------------------------------------------------------
+
+
+def test_argon2id_memory_must_cover_its_lanes_wherever_the_floor_would_allow_less(monkeypatch):
+    """Argon2 needs 8 KiB a lane. Today's floor of 19 MiB always covers 16 lanes: the rule must not depend on it."""
+    monkeypatch.setattr(crypto, "_MIN_MEMORY_KIB", 8)
+    assert Argon2Params(memory_kib=8 * 4, iterations=3, lanes=4).validate()
+    with pytest.raises(VaultError, match="too small for its lane count"):
+        Argon2Params(memory_kib=8 * 4 - 1, iterations=3, lanes=4).validate()
+
+
+def test_a_single_pass_below_the_owasp_minimum_is_refused_and_the_message_names_46_mib():
+    assert Argon2Params(memory_kib=46 * 1024, iterations=1, lanes=1).validate()
+    with pytest.raises(VaultError, match="single pass needs at least 46 MiB"):
+        Argon2Params(memory_kib=46 * 1024 - 1, iterations=1, lanes=1).validate()
+
+
+def test_the_smaller_default_is_for_machines_with_less_than_three_gibibytes_exactly(monkeypatch):
+    monkeypatch.delenv("IRONDOME_KDF_MEMORY_MIB")
+    monkeypatch.setattr(crypto, "_physical_memory_bytes", lambda: 3 * 1024**3)
+    assert default_argon2() is DEFAULT_ARGON2
+    monkeypatch.setattr(crypto, "_physical_memory_bytes", lambda: 3 * 1024**3 - 1)
+    assert default_argon2() == Argon2Params(memory_kib=64 * 1024)
+
+
+class _RecordedHKDF:
+    """Stands in for the library's HKDF: records what each derivation was given, and can fail on one of them."""
+
+    runs: list = []
+    fail_on: Optional[int] = None
+
+    def __init__(self, **settings):
+        self.settings = settings
+
+    def derive_into(self, key_material, out):
+        type(self).runs.append((bytes(key_material), self.settings, out))
+        out[:] = b"\x55" * len(out)
+        if type(self).fail_on == len(type(self).runs):
+            raise MemoryError
+
+
+@pytest.fixture
+def recorded_hkdf(monkeypatch):
+    _RecordedHKDF.runs, _RecordedHKDF.fail_on = [], None
+    monkeypatch.setattr(crypto, "HKDF", _RecordedHKDF)
+    return _RecordedHKDF
+
+
+def test_hkdf_is_run_a_second_time_on_zeros_with_the_same_settings_and_not_into_the_key(recorded_hkdf):
+    with hkdf(b"\x07" * 32, info=b"purpose", salt=b"salt", length=48) as key:
+        (first, settings, into), (second, again, scratch) = recorded_hkdf.runs
+        assert first == b"\x07" * 32 and second == bytes(32)
+        assert settings["length"] == again["length"] == 48
+        assert settings["salt"] == again["salt"] == b"salt" and settings["info"] == again["info"] == b"purpose"
+        assert into.obj is not scratch and len(scratch) == 48 and len(key) == 48
+
+
+@pytest.mark.parametrize("failing_run", [1, 2])
+def test_hkdf_that_fails_in_either_run_wipes_the_key_it_was_writing(monkeypatch, recorded_hkdf, failing_run):
+    wiped = []
+
+    class Watched(SecureBuffer):
+        def wipe(self):
+            wiped.append(self)
+            super().wipe()
+
+    monkeypatch.setattr(crypto, "SecureBuffer", Watched)
+    recorded_hkdf.fail_on = failing_run
+    with pytest.raises(MemoryError) as raised:
+        hkdf(b"\x07" * 32, info=b"purpose", length=32)
+    assert len(recorded_hkdf.runs) == failing_run
+    # While the failure is still held, and with it the frame the key was in: wiped by hkdf itself,
+    # not whenever the last reference to the buffer happens to go.
+    assert raised.value is not None and len(wiped) == 1 and wiped[0].wiped
+
+
+class _CipherThatFailsAfterWriting:
+    """Writes a plaintext into the output, as the real cipher does before it checks, then fails some other way."""
+
+    def __init__(self, failure):
+        self.failure = failure
+
+    def decrypt_into(self, nonce, body, aad, out):
+        out[:] = b"\x55" * len(out)
+        raise self.failure
+
+
+@pytest.mark.parametrize("failure", [MemoryError(), KeyboardInterrupt(), RuntimeError("the library broke")])
+def test_open_sealed_that_fails_for_another_reason_than_the_tag_wipes_its_output_and_says_so(monkeypatch, failure):
+    wiped = []
+    real_wipe = crypto.wipe_bytes
+    monkeypatch.setattr(crypto, "wipe_bytes", lambda out: (wiped.append(out), real_wipe(out))[1])
+    blob = seal(KEY, b"PLAINTEXT-PLAINTEXT", b"aad")
+    monkeypatch.setattr(crypto, "_cipher", lambda key: _CipherThatFailsAfterWriting(failure))
+
+    with pytest.raises(type(failure)) as raised:
+        open_sealed(KEY, blob, b"aad")
+
+    assert raised.value is failure  # the same failure, not a "wrong key" in its place
+    assert len(wiped) == 1 and bytes(wiped[0]) == bytes(len(b"PLAINTEXT-PLAINTEXT"))
+
+
+@pytest.mark.parametrize("failure", [MemoryError(), KeyboardInterrupt(), RuntimeError("the library broke")])
+def test_open_sealed_into_that_fails_for_another_reason_than_the_tag_zeroes_the_buffer_and_says_so(
+    monkeypatch, failure
+):
+    with SecureBuffer.random(32) as inner:
+        blob = seal(KEY, inner, b"slot")
+    monkeypatch.setattr(crypto, "_cipher", lambda key: _CipherThatFailsAfterWriting(failure))
+
+    with SecureBuffer(32) as out:
+        with pytest.raises(type(failure)) as raised:
+            open_sealed_into(KEY, blob, b"slot", out)
+        assert raised.value is failure
+        assert bytes(out.view()) == bytes(32)
+
+
+@needs_fork
+def test_on_a_system_without_readv_argon2id_runs_here(monkeypatch, stretched_here):
+    """The key is read from the child with readv, straight into locked memory. Without it there is no child."""
+    salt, password, expected, here = stretched_here
+    monkeypatch.delattr(os, "readv")
+    with argon2id(password, salt, SMALL) as key:
+        assert bytes(key.view()) == expected
+    assert here == [1]
+
+
+@needs_fork
+def test_a_child_that_finished_is_never_sent_a_signal(monkeypatch):
+    """Its process id is free once it is reaped: a signal sent then could reach an unrelated process."""
+    sent = []
+    real_kill = os.kill
+    parent = os.getpid()
+
+    def recording_kill(pid, signum):
+        if os.getpid() == parent:
+            sent.append((pid, signum))
+        return real_kill(pid, signum)
+
+    monkeypatch.setattr(os, "kill", recording_kill)
+    with argon2id(b"correct horse battery staple", bytes(16), SMALL):
+        pass
+    assert sent == []
+
+
+@needs_fork
+def test_if_irondome_is_killed_while_it_sends_the_password_the_child_ends_too(tmp_path):
+    """The child must not wait for ever, with part of the input in its memory, for a parent that is gone."""
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    script = (
+        "import os, signal\n"
+        "from irondome import crypto\n"
+        "parent = os.getpid()\n"
+        "real = os.write\n"
+        "def write(descriptor, data):\n"
+        "    if os.getpid() == parent and descriptor > 2:\n"
+        "        os.kill(parent, signal.SIGKILL)\n"
+        "    return real(descriptor, data)\n"
+        "os.write = write\n"
+        "crypto.argon2id(b'correct horse battery staple', bytes(16),\n"
+        "                crypto.Argon2Params(memory_kib=19 * 1024, iterations=2, lanes=1))\n"
+    )
+    process = subprocess.Popen([sys.executable, "-c", script], start_new_session=True,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        assert process.wait(timeout=60) == -signal.SIGKILL  # it was killed before a byte was sent
+        deadline = time.monotonic() + 30
+        while True:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                break  # nothing is left of its process group: the child has ended
+            except PermissionError:
+                pass
+            assert time.monotonic() < deadline, "the child is still waiting for a parent that was killed"
+            time.sleep(0.05)
+    finally:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass

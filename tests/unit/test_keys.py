@@ -1310,3 +1310,150 @@ def test_the_child_that_runs_argon2id_is_sent_the_prehash_never_the_master_passw
 
     assert len(sent) == 2 and sent[0] == sent[1] and len(sent[0]) == 32
     assert password[:8] not in sent[0] and sent[0] not in password
+
+
+# ---------------------------------------------------------------------------
+# What a change of one line would have got past the tests above
+#
+# The two property tests of the hand-made UTF-8 code compare it with Python on
+# random input, and random input almost never lands on the first or the last
+# code point of a length, on a surrogate, or on an overlong form. Each value
+# below is one where a single changed comparison in keys.py went unnoticed.
+# ---------------------------------------------------------------------------
+
+UTF8_EDGES = [0x00, 0x7F, 0x80, 0xBF, 0x7FF, 0x800, 0xD7FF, 0xE000, 0xFFFF, 0x10000, 0x10FFFF]
+
+
+@pytest.mark.parametrize("point", UTF8_EDGES, ids=[f"U+{point:04X}" for point in UTF8_EDGES])
+def test_the_hand_made_utf8_code_agrees_with_python_on_the_first_and_last_code_point_of_every_length(point):
+    from irondome.keys import _decode_utf8, _encode_utf8
+
+    for text in (chr(point), "a" + chr(point) + "א" + chr(point) + "z"):
+        encoded = text.encode("utf-8")
+        assert _decode_utf8(memoryview(encoded)) == text
+        with _encode_utf8(text) as buffer:
+            assert bytes(buffer.view()) == encoded
+
+
+NOT_UTF8 = [
+    b"\x80", b"\xbf", b"\xc0\x80", b"\xc1\xbf",  # a continuation byte alone; two bytes for what fits in one
+    b"\xe0\x80\x80", b"\xe0\x9f\xbf",  # three bytes for what fits in two
+    b"\xed\xa0\x80", b"\xed\xbf\xbf",  # the first and the last surrogate
+    b"\xf0\x80\x80\x80", b"\xf0\x8f\xbf\xbf",  # four bytes for what fits in three
+    b"\xf4\x90\x80\x80", b"\xf5\x80\x80\x80", b"\xf7\xbf\xbf\xbf", b"\xf8\x88\x80\x80\x80", b"\xff",  # past U+10FFFF
+    b"\xc2", b"\xe0\xa0", b"\xf0\x90\x80",  # cut short
+    b"\xc2\x41", b"\xe0\xa0\x41", b"\xf0\x90\x80\x41", b"\xc2\xc2", b"\xe0\x41\x80",  # not followed as it must be
+]
+
+
+@pytest.mark.parametrize("data", NOT_UTF8, ids=[data.hex() for data in NOT_UTF8])
+def test_the_hand_made_utf8_decoder_refuses_every_malformed_form_python_refuses(data):
+    from irondome.keys import _decode_utf8
+
+    for sample in (data, b"\xc3\xa9" + data, data + b"a", b"abc" + data + b"\xd7\x90"):
+        with pytest.raises(UnicodeDecodeError):
+            sample.decode("utf-8")
+        assert _decode_utf8(memoryview(sample)) is None
+
+
+@pytest.mark.parametrize("text", [
+    "µ",  # MICRO SIGN: its lead byte is the lowest there is, and NFKC changes it
+    "pass word", "ª", "ࠀ", "￿", "\U00010000", "\U0010ffff", "ﬁ", "①\U0001d7d8",
+])
+def test_a_password_with_a_character_at_an_edge_of_utf8_is_normalised_like_any_other(text):
+    import unicodedata
+
+    assert normalised(text.encode("utf-8")) == unicodedata.normalize("NFKC", text).encode("utf-8")
+
+
+def test_the_hand_made_utf8_encoder_wipes_what_it_wrote_when_it_fails(monkeypatch):
+    import irondome.keys as keys_module
+
+    wiped = []
+
+    class Failing(SecureBuffer):
+        def view(self):
+            raise MemoryError
+
+        def wipe(self):
+            wiped.append(self)
+            super().wipe()
+
+    monkeypatch.setattr(keys_module, "SecureBuffer", Failing)
+    with pytest.raises(MemoryError) as raised:
+        keys_module._encode_utf8("סיסמה")
+    # Wiped by the encoder itself, while the failure (and the frame the buffer was in) is still held.
+    assert raised.value is not None and len(wiped) == 1 and wiped[0].wiped
+
+
+@pytest.mark.parametrize("size", [0, 19, 21, 32])
+def test_only_twenty_bytes_can_be_written_as_a_recovery_key(size):
+    with pytest.raises(ValueError, match="a recovery key is 20 bytes"):
+        format_recovery_key(bytes(size))
+
+
+def test_writing_and_reading_a_recovery_key_wipe_their_working_copies(monkeypatch):
+    import irondome.keys as keys_module
+
+    wiped = []
+    real = keys_module.wipe_bytes
+    monkeypatch.setattr(keys_module, "wipe_bytes", lambda data: (real(data), wiped.append(data))[0])
+    raw = bytes(range(1, 21))
+
+    text = format_recovery_key(raw)
+    assert len(wiped) == 1 and isinstance(wiped[0], bytearray) and wiped[0] == bytes(len(text))
+
+    assert parse_recovery_key(text) == raw
+    assert len(wiped) == 2 and isinstance(wiped[1], bytearray) and wiped[1] == bytes(20)
+
+
+@pytest.mark.parametrize("created, accepted", [(0, True), (2**63 - 1, True), (2**63, False), (-1, False)])
+def test_a_creation_time_is_any_number_a_signed_64_bit_field_holds_and_no_other(documents, created, accepted):
+    for document in documents.values():
+        document["created"] = created
+        if accepted:
+            assert Keyslot.from_dict(document).created == created
+        else:
+            with pytest.raises(VaultError, match="keyslot metadata is malformed"):
+                Keyslot.from_dict(document)
+
+
+def test_a_keyslot_made_without_a_time_or_a_label_has_time_zero_and_no_label():
+    slot = Keyslot(id="a" * 32, kind="recovery", wrap="")
+    assert slot.created == 0 and slot.label == "" and slot.kdf is None and slot.device is None and slot.salt is None
+
+
+@pytest.mark.parametrize("failure", [MemoryError(), KeyboardInterrupt(), RuntimeError("the library broke")])
+def test_opening_a_slot_that_fails_for_another_reason_than_a_wrong_key_wipes_the_vault_key_and_says_so(
+    monkeypatch, vault_key, failure
+):
+    import irondome.keys as keys_module
+
+    slot = password_slot(vault_key, None)
+    made: List[SecureBuffer] = []
+    wiped: List[SecureBuffer] = []
+    written_into: List[SecureBuffer] = []
+
+    class Watched(SecureBuffer):
+        def __init__(self, size):
+            super().__init__(size)
+            made.append(self)
+
+        def wipe(self):
+            if not self.wiped:
+                wiped.append(self)
+            super().wipe()
+
+    def failing(kek, blob, aad, out):
+        written_into.append(out)
+        out.view()[:] = b"\x55" * len(out)  # the cipher writes before it checks
+        raise failure
+
+    monkeypatch.setattr(keys_module, "SecureBuffer", Watched)
+    monkeypatch.setattr(keys_module, "open_sealed_into", failing)
+    with pytest.raises(type(failure)) as raised:
+        open_slot(slot, VAULT_ID, password=PASSWORD, interactive=False)
+
+    assert raised.value is failure  # the failure itself, not "wrong master password" in its place
+    # While the failure is still held: the buffer the vault key was being written into is already wiped.
+    assert len(written_into) == 1 and written_into[0] in made and written_into[0] in wiped

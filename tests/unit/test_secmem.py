@@ -1286,3 +1286,189 @@ def test_windows_without_a_console_is_a_usage_error(monkeypatch):
     monkeypatch.setattr(secmem, "_IS_WINDOWS", True)
     with pytest.raises(UsageError, match="no terminal to ask on"):
         within(10, lambda: read_secret("Password: "))
+
+
+# ---------------------------------------------------------------------------
+# What a change of one line would have got past the tests above
+#
+# Each test here was written because a line of secmem.py could be changed, or
+# removed, with every other test of this file still passing.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not POSIX, reason="the mapping is made with POSIX flags")
+def test_wipe_zeroes_every_page_before_it_gives_the_memory_back(monkeypatch):
+    """Once the pages are unmapped nothing can read them, so this looks at the moment they are given back."""
+    import mmap
+
+    given_back: List[bytes] = []
+
+    class Watched(mmap.mmap):
+        def close(self):
+            given_back.append(bytes(self[:]))
+            super().close()
+
+    monkeypatch.setattr(secmem.mmap, "mmap", Watched)
+    buffer = SecureBuffer(100)
+    buffer.view()[:] = b"\xa5" * 100
+    buffer.wipe()
+
+    assert len(given_back) == 1
+    assert len(given_back[0]) >= 100 and len(given_back[0]) % mmap.PAGESIZE == 0
+    assert given_back[0] == bytes(len(given_back[0]))
+
+
+def test_a_buffer_whose_memory_could_not_be_had_counts_as_wiped_and_can_be_dropped(monkeypatch):
+    def no_memory(*arguments, **settings):
+        raise OSError(errno.ENOMEM, "Cannot allocate memory")
+
+    buffer = SecureBuffer.__new__(SecureBuffer)
+    monkeypatch.setattr(secmem.mmap, "mmap", no_memory)
+    with pytest.raises(OSError):
+        buffer.__init__(64)
+    monkeypatch.undo()
+
+    assert buffer.wiped is True
+    buffer.wipe()  # what its destructor does: there is nothing to wipe, and it must not fail
+    assert buffer.wiped is True
+
+
+def test_random_from_the_os_generator_wipes_the_copy_it_was_handed(monkeypatch):
+    handed: List[bytes] = []
+    wiped: List[Any] = []
+    real_urandom, real_wipe = os.urandom, secmem.wipe_bytes
+
+    def urandom(size):
+        handed.append(real_urandom(size))
+        return handed[-1]
+
+    monkeypatch.setattr(secmem, "_get_libc", lambda: None)
+    monkeypatch.setattr(secmem.os, "urandom", urandom)
+
+    def wipe(data):
+        wiped.append((data, bytes(bytearray(data))))  # a copy: bytes(data) would be the object itself
+        return real_wipe(data)
+
+    monkeypatch.setattr(secmem, "wipe_bytes", wipe)
+
+    with SecureBuffer.random(48) as buffer:
+        assert len(handed) == 1 and len(wiped) == 1
+        assert wiped[0][0] is handed[0]  # the very object the generator returned
+        assert bytes(buffer.view()) == wiped[0][1] != bytes(48)  # the buffer holds what it held
+        if CPYTHON:
+            assert handed[0] == bytes(48)  # and that object holds zeros now
+
+
+class _Getentropy:
+    """Stands in for the C library's getentropy: fills what it is asked to, or refuses from some call on."""
+
+    argtypes = None
+    restype = None
+
+    def __init__(self, refuse_from: Optional[int] = None) -> None:
+        self.calls: List[int] = []
+        self.refuse_from = refuse_from
+
+    def __call__(self, pointer, length):
+        self.calls.append(length)
+        if self.refuse_from is not None and len(self.calls) >= self.refuse_from:
+            return -1
+        ctypes.memset(pointer, 0x41 + len(self.calls), length)
+        return 0
+
+
+def test_random_filled_by_getentropy_asks_for_256_bytes_at_most_and_never_asks_the_os_generator(monkeypatch):
+    getentropy = _Getentropy()
+    asked: List[int] = []
+    monkeypatch.setattr(secmem, "_get_libc", lambda: types.SimpleNamespace(getentropy=getentropy))
+    monkeypatch.setattr(secmem.os, "urandom", lambda size: asked.append(size) or bytes(size))
+
+    with SecureBuffer.random(600) as buffer:
+        assert bytes(buffer.view()) == b"\x42" * 256 + b"\x43" * 256 + b"\x44" * 88
+    assert getentropy.calls == [256, 256, 88] and asked == []
+
+
+def test_random_that_getentropy_refuses_part_way_is_filled_again_whole_by_the_os_generator(monkeypatch):
+    getentropy = _Getentropy(refuse_from=2)
+    monkeypatch.setattr(secmem, "_get_libc", lambda: types.SimpleNamespace(getentropy=getentropy))
+    monkeypatch.setattr(secmem.os, "urandom", lambda size: b"\x7e" * size)
+
+    with SecureBuffer.random(600) as buffer:
+        assert bytes(buffer.view()) == b"\x7e" * 600  # nothing of the half-filled attempt is kept
+    assert getentropy.calls == [256, 256]
+
+
+WIDTH_EDGES = [0x7F, 0x80, 0xFF, 0x100, 0xFFFF, 0x10000]
+
+
+@pytest.mark.skipif(not CPYTHON, reason="in-place zeroing of str is CPython-specific")
+@pytest.mark.parametrize("widest", WIDTH_EDGES, ids=[f"U+{point:04X}" for point in WIDTH_EDGES])
+def test_wipe_str_at_the_widest_and_narrowest_character_of_each_storage_width(widest):
+    """CPython stores a string by its widest character: one byte, two or four. These are the edges between them."""
+    before = fresh_str([0x41, 0x5D0, 0x1F511])
+    text = fresh_str([0x61, widest, 0x62, widest, 0x63])
+    after = fresh_str([0x42, 0x5D1, 0x1F512])
+    assert secmem._wipe_str(text) is True
+    assert len(text) == 5 and all(ord(char) == 0 for char in text)
+    assert [ord(char) for char in before] == [0x41, 0x5D0, 0x1F511]
+    assert [ord(char) for char in after] == [0x42, 0x5D1, 0x1F512]
+
+
+@pytest.mark.skipif(not CPYTHON, reason="in-place zeroing of bytes is CPython-specific")
+def test_wipe_bytes_zeroes_two_bytes_and_leaves_the_shared_one_byte_objects_alone():
+    pair = bytes(bytearray([0x41, 0x42]))
+    assert wipe_bytes(pair) is True and pair == b"\x00\x00"
+    single = bytes(bytearray([0x41]))
+    assert wipe_bytes(single) is False and single == b"A"
+    assert wipe_bytes(b"") is False
+
+
+@pytest.mark.skipif(not POSIX, reason="resource limits are POSIX")
+def test_harden_process_asks_for_no_core_file_whatever_the_session_already_allows(monkeypatch):
+    """In a session whose limit is already zero the test above passes whatever harden_process does."""
+    import resource
+
+    asked: List[Tuple[int, Tuple[int, int]]] = []
+    monkeypatch.setattr(resource, "setrlimit", lambda which, limits: asked.append((which, limits)))
+
+    monkeypatch.setenv("IRONDOME_DEBUG", "1")
+    secmem.harden_process()
+    assert asked == []
+
+    monkeypatch.delenv("IRONDOME_DEBUG")
+    secmem.harden_process()
+    assert asked == [(resource.RLIMIT_CORE, (0, 0))]
+
+
+def test_a_read_that_fails_is_reported_as_a_usage_error_naming_the_reason(tmp_path):
+    descriptor = os.open(str(tmp_path), os.O_RDONLY)  # a directory: it opens, and cannot be read
+    try:
+        with pytest.raises(UsageError, match="could not read the secret from the input: .*[Dd]irectory"):
+            read_secret_from_fd(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def test_a_buffer_says_it_is_wiped_only_once_it_is():
+    buffer = SecureBuffer(16)
+    assert buffer.wiped is False
+    buffer.view()[:] = b"\xa5" * 16
+    assert buffer.wiped is False
+    buffer.wipe()
+    assert buffer.wiped is True
+
+
+def test_random_is_filled_by_the_os_generator_when_getentropy_raises(monkeypatch):
+    """A buffer returned as random with nothing written into it would be a key of zeros."""
+
+    class Raising:
+        argtypes = None
+        restype = None
+
+        def __call__(self, pointer, length):
+            raise OSError(errno.ENOSYS, "Function not implemented")
+
+    monkeypatch.setattr(secmem, "_get_libc", lambda: types.SimpleNamespace(getentropy=Raising()))
+    monkeypatch.setattr(secmem.os, "urandom", lambda size: b"\x7e" * size)
+    with SecureBuffer.random(300) as buffer:
+        assert bytes(buffer.view()) == b"\x7e" * 300

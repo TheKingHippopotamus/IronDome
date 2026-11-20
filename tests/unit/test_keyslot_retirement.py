@@ -191,3 +191,111 @@ def test_keyslots_without_a_device_key_need_no_record(make_vault):
     assert keys.record_retirement(vault.slots(KIND_RECOVERY)) is False
     assert not record().exists()
     assert keys.finish_retirement() == []
+
+
+# ---------------------------------------------------------------------------
+# What the record itself must be
+#
+# The one damaged record above is not JSON at all. A change of any single
+# condition in keys._read_retirement went unnoticed: each of them is tried
+# alone here, on a record that is well formed in every other way.
+# ---------------------------------------------------------------------------
+
+DEVICE = {"backend": "software", "ref": "0" * 32}
+
+
+def well_formed() -> dict:
+    return {"format": "irondome-keyslot-retirement", "version": 1, "devices": [dict(DEVICE)]}
+
+
+def record_holding(document: object) -> Path:
+    record().write_text(json.dumps(document), encoding="utf-8")
+    return record()
+
+
+def test_a_well_formed_record_is_read_and_the_one_written_is_exactly_that_document(make_vault):
+    make_vault()
+    assert keys._read_retirement(record_holding(well_formed())) == [DEVICE]
+    keys._write_retirement(record(), [DEVICE])
+    assert json.loads(record().read_text(encoding="utf-8")) == well_formed()
+
+
+@pytest.mark.parametrize("document", [
+    [], "record", 7, None, [well_formed()],
+    {**well_formed(), "format": "irondome-keyslot"}, {**well_formed(), "format": None},
+    {"version": 1, "devices": []},
+    {**well_formed(), "version": 2}, {**well_formed(), "version": "1"}, {**well_formed(), "version": 0},
+    {"format": "irondome-keyslot-retirement", "devices": []},
+    {**well_formed(), "devices": {"0": DEVICE}}, {**well_formed(), "devices": None},
+    {**well_formed(), "devices": "software"},
+    {"format": "irondome-keyslot-retirement", "version": 1},
+    {**well_formed(), "devices": [DEVICE] * 257},
+], ids=lambda document: json.dumps(document)[:48])
+def test_a_document_that_is_not_such_a_record_in_any_one_way_is_refused(make_vault, document):
+    make_vault()
+    with pytest.raises(VaultError, match="^it is not a record of device keys to retire$"):
+        keys._read_retirement(record_holding(document))
+
+
+@pytest.mark.parametrize("descriptor", [
+    "software", None, 7, ["software"], {}, {"ref": "0" * 32}, {"backend": None}, {"backend": 7},
+    {"backend": ["software"]},
+], ids=lambda descriptor: json.dumps(descriptor))
+def test_a_record_that_names_a_device_key_without_describing_it_is_refused(make_vault, descriptor):
+    make_vault()
+    for devices in ([descriptor], [DEVICE, descriptor], [descriptor, DEVICE]):
+        with pytest.raises(VaultError, match="^it names a device key it does not describe$"):
+            keys._read_retirement(record_holding({**well_formed(), "devices": devices}))
+
+
+@pytest.mark.parametrize("content", [b"", b"{", b"not a record", b"\xff\xfe{}", b"[" * 100_000])
+def test_a_record_that_is_not_json_is_refused_as_that(make_vault, content):
+    make_vault()
+    record().write_bytes(content)
+    with pytest.raises(VaultError, match="^it is not valid JSON$"):
+        keys._read_retirement(record())
+
+
+def test_a_record_holds_256_device_keys_and_a_change_that_would_make_it_257_is_refused_whole(change):
+    vault, old, new = change
+    others = [{"backend": "software", "ref": f"{number:032x}"} for number in range(255)]
+    record_holding({**well_formed(), "devices": others})
+
+    with paths.file_lock():
+        assert keys.record_retirement([old]) is True  # the 256th
+        assert len(keys._read_retirement(record())) == 256
+        before = record().read_bytes()
+        with pytest.raises(VaultError, match="already names 256 device keys to retire; nothing was changed"):
+            keys.record_retirement([new])  # would be the 257th
+    assert record().read_bytes() == before
+    assert sorted(key_files()) == sorted([key_file(old), key_file(new)])
+
+
+def test_one_device_key_is_one_entry_whatever_the_order_its_description_was_written_in(change):
+    vault, old, new = change
+    assert old.device is not None and len(old.device) >= 2
+    assert keys._identity(old.device) == keys._identity(dict(reversed(list(old.device.items()))))
+    record_holding({**well_formed(), "devices": [dict(reversed(list(old.device.items())))]})
+    with paths.file_lock():
+        keys.record_retirement([old])
+    assert len(keys._read_retirement(record())) == 1
+
+
+def test_a_record_that_cannot_be_updated_is_reported_with_the_reason(change, monkeypatch):
+    vault, old, new = change
+    with paths.file_lock():
+        keys.record_retirement([old, new])
+        write(vault, old, new)
+
+    def refuse(descriptor):
+        raise HardwareError("the device directory is read-only")
+
+    def no_write(path, descriptors):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(device.get_backend("software"), "destroy", refuse)
+    monkeypatch.setattr(keys, "_write_retirement", no_write)
+    problems = keys.finish_retirement()
+    assert len(problems) == 2
+    assert "could not be destroyed yet" in problems[0]
+    assert "could not be updated: Permission denied" in problems[1] and str(record()) in problems[1]
