@@ -2366,3 +2366,501 @@ def test_a_capability_directory_that_cannot_be_used_is_reported_not_crashed_on(v
             call()
     assert caps.destroy_all() == 0
     assert blocker.read_bytes() == b""
+
+
+# ---------------------------------------------------------------------------
+# What a change of one line would have got past the tests above
+#
+# Each test here was written because a line of caps.py could be changed, or
+# removed, with every test above and every end-to-end test still passing.
+# ---------------------------------------------------------------------------
+
+
+def parsed(document: Dict[str, Any]) -> Any:
+    return caps._Header.from_bytes(canonical(document), document["id"])
+
+
+def test_a_header_gives_its_times_as_whole_numbers(vault):
+    """JSON has numbers that are equal to a whole number and are not one: 900.0 is written back as 900.0."""
+    document = header_of(caps.create_session(vault))
+    assert parsed(document).expires == document["expires"]
+
+    for field in ("created", "expires"):
+        with pytest.raises(caps._Malformed):
+            parsed(dict(document, **{field: float(document[field])}))
+
+
+def test_a_header_holds_a_time_from_zero_to_two_to_the_fortieth_and_no_other(vault):
+    document = header_of(caps.create_session(vault, ttl=900))
+    latest = 2**40
+
+    assert parsed(dict(document, created=0, expires=900)).created == 0
+    assert parsed(dict(document, created=latest - 900, expires=latest)).expires == latest
+    with pytest.raises(caps._Malformed):
+        parsed(dict(document, created=-1, expires=899))
+    with pytest.raises(caps._Malformed):
+        parsed(dict(document, created=latest - 899, expires=latest + 1))
+
+
+def test_a_label_of_two_hundred_characters_is_kept_and_one_more_is_refused(vault):
+    assert caps.MAX_LABEL == 200
+    longest = "l" * caps.MAX_LABEL
+
+    session = caps.create_session(vault, label=longest)
+    grant, info = caps.create_grant(vault, ["GITHUB_TOKEN"], label=longest)
+
+    assert info.label == longest
+    assert sorted(cap.label for cap in caps.list_caps()) == [longest, longest]
+    caps.open_session(session, vault.file).wipe()
+    assert caps.open_grant(grant).value("GITHUB_TOKEN") == GITHUB_PASSWORD
+    with pytest.raises(UsageError):
+        caps.create_session(vault, label=longest + "l")
+    with pytest.raises(UsageError):
+        caps.create_grant(vault, ["GITHUB_TOKEN"], label=longest + "l")
+
+
+def test_a_file_is_read_up_to_the_largest_a_capability_can_be_and_not_one_byte_past(vault, monkeypatch):
+    token = caps.create_session(vault)
+    size = cap_path(token).stat().st_size
+
+    monkeypatch.setattr(caps, "_MAX_FILE", size)
+    assert [cap.id for cap in caps.list_caps()] == [id_of(token)]
+    caps.open_session(token, vault.file).wipe()
+
+    monkeypatch.setattr(caps, "_MAX_FILE", size - 1)
+    assert caps.list_caps() == []
+    with pytest.raises(AuthError, match="damaged or was altered"):
+        caps.open_session(token, vault.file)
+
+
+@posix_only
+def test_a_directory_in_a_capabilitys_place_is_refused_as_a_damaged_file(vault):
+    caps.create_session(vault)  # so that the capability directory is there
+    cap_id = os.urandom(16)
+    cap_path(cap_id.hex()).mkdir()
+
+    with pytest.raises(AuthError, match="damaged or was altered"):
+        caps.open_session(make_token("session", cap_id, os.urandom(32)), vault.file)
+    with pytest.raises(AuthError, match="damaged or was altered"):
+        caps.open_grant(make_token("grant", cap_id, os.urandom(32)))
+    assert caps.session_expires(make_token("session", cap_id, os.urandom(32))) is None
+    assert cap_path(cap_id.hex()).is_dir()
+
+
+@posix_only
+def test_a_link_to_a_directory_under_a_capabilitys_name_is_destroyed_as_a_file_and_never_followed(vault, tmp_path):
+    token = caps.create_session(vault)
+    outside = tmp_path / "somebody-elses"
+    outside.mkdir()
+    (outside / "kept.txt").write_bytes(b"not IronDome's\n")
+    link = cap_path(os.urandom(16).hex())
+    link.symlink_to(outside, target_is_directory=True)
+
+    assert [cap.id for cap in caps.list_caps()] == [id_of(token)]
+    assert caps.destroy_all() == 2
+
+    assert not os.path.lexists(str(link))
+    assert (outside / "kept.txt").read_bytes() == b"not IronDome's\n"
+
+
+def test_the_refusal_of_a_lifetime_says_the_longest_in_hours_or_days(vault):
+    with pytest.raises(UsageError, match=r"from 60 to 43200 \(12 hours\)"):
+        caps.create_session(vault, ttl=59)
+    with pytest.raises(UsageError, match=r"from 60 to 2592000 \(30 days\)"):
+        caps.create_grant(vault, ["GITHUB_TOKEN"], ttl=59)
+
+
+def test_the_refusal_of_a_long_grant_for_a_one_time_password_says_a_day_in_hours(bank):
+    with pytest.raises(UsageError, match=r"at most 86400 seconds \(24 hours\)"):
+        caps.create_grant(bank, ["BANK_OTP"], ttl=86_401)
+
+
+REFUSED_IN_A_REFERENCE = [0x00, 0x1F, 0x7F, 0x80, 0x9F, 0x2028, 0x2029]
+ALLOWED_IN_A_REFERENCE = [0x20, 0x7E, 0xA0, 0x2027]
+
+
+@pytest.mark.parametrize("point", REFUSED_IN_A_REFERENCE, ids=[f"U+{point:04X}" for point in REFUSED_IN_A_REFERENCE])
+def test_a_reference_holds_no_control_character_at_either_edge_of_their_ranges(point):
+    with pytest.raises(UsageError, match="no control characters"):
+        caps._reference(f"a{chr(point)}b")
+
+
+@pytest.mark.parametrize("point", ALLOWED_IN_A_REFERENCE, ids=[f"U+{point:04X}" for point in ALLOWED_IN_A_REFERENCE])
+def test_a_reference_may_hold_the_characters_next_to_the_control_ranges(point):
+    assert caps._reference(f"a{chr(point)}b") == f"a{chr(point)}b"
+
+
+def test_a_reference_is_512_characters_at_most():
+    assert caps._reference("r" * 512) == "r" * 512
+    assert caps._reference("irondome://" + "r" * 512) == "r" * 512
+    with pytest.raises(UsageError, match="1 to 512 characters"):
+        caps._reference("r" * 513)
+
+
+GOOD_ITEMS: Dict[str, Any] = {
+    "an entry name of one character": {"entry": "e", "field": "password", "value": "v"},
+    "an entry name of 200 characters": {"entry": "e" * 200, "field": "password", "value": "v"},
+    "a field name of one character": {"entry": "a", "field": "f", "value": "v"},
+    "a field name of 64 characters": {"entry": "a", "field": "f" * 64, "value": "v"},
+    "the shortest time step": dict(TOTP_ITEM, period=otp.MIN_PERIOD),
+    "the longest time step": dict(TOTP_ITEM, period=otp.MAX_PERIOD),
+    "the last counter 64 bits hold": dict(TOTP_ITEM, codes={str(2**64 - 1): "123456"}),
+}
+BAD_ITEMS: Dict[str, Any] = {
+    "an entry name of 201 characters": {"entry": "e" * 201, "field": "password", "value": "v"},
+    "a field name of 65 characters": {"entry": "a", "field": "f" * 65, "value": "v"},
+    "a time step below the shortest": dict(TOTP_ITEM, period=otp.MIN_PERIOD - 1),
+    "a time step above the longest": dict(TOTP_ITEM, period=otp.MAX_PERIOD + 1),
+    "a counter 64 bits do not hold": dict(TOTP_ITEM, codes={str(2**64): "123456"}),
+}
+
+
+@pytest.mark.parametrize("name", sorted(GOOD_ITEMS))
+def test_a_grant_made_by_hand_at_an_edge_of_what_irondome_writes_opens(vault, name):
+    token = craft(vault, with_item(good_payload(vault), GOOD_ITEMS[name]), uses_left=None)
+    grant = caps.open_grant(token)
+    assert grant.is_totp("A") is (GOOD_ITEMS[name]["field"] == "totp")
+
+
+@pytest.mark.parametrize("name", sorted(BAD_ITEMS))
+def test_a_grant_made_by_hand_one_step_past_that_edge_is_refused(vault, name):
+    token = craft(vault, with_item(good_payload(vault), BAD_ITEMS[name]), uses_left=None)
+    with pytest.raises(AuthError, match="is not what IronDome writes"):
+        caps.open_grant(token)
+
+
+@pytest.mark.parametrize("stray", ["\n", " ", "-", "!"])
+def test_an_audit_key_with_a_character_base64_does_not_have_is_refused(vault, stray):
+    """A lenient decoder skips such a character and still finds 32 bytes."""
+    payload = good_payload(vault)
+    key = payload["audit_key"]
+    token = craft(vault, dict(payload, audit_key=key[:8] + stray + key[8:]))
+    with pytest.raises(AuthError, match="is not what IronDome writes"):
+        caps.open_grant(token)
+
+
+@pytest.mark.parametrize("secret, device_key", [(31, 32), (33, 32), (32, 31), (32, 33), (0, 32), (32, 0)])
+def test_a_capability_key_is_made_from_two_keys_of_32_bytes_and_nothing_else(secret, device_key):
+    with pytest.raises(ValueError, match="32-byte token secret and a 32-byte device key"):
+        caps._wrap_key("grant", b"s" * secret, b"d" * device_key, b"salt" * 4)
+    with caps._wrap_key("grant", b"s" * 32, b"d" * 32, b"salt" * 4) as key:
+        assert len(key) == 32
+
+
+def test_closing_a_grant_drops_the_values_it_held_and_does_not_only_refuse_them(bank):
+    token, _ = caps.create_grant(bank, ["GITHUB_TOKEN", "BANK_OTP"])
+    grant = caps.open_grant(token)
+    held = list(grant._items.values())
+    assert any(item.value == GITHUB_PASSWORD for item in held) and any(item.codes for item in held)
+
+    grant.close()
+
+    assert sorted(grant._items) == ["BANK_OTP", "GITHUB_TOKEN"]
+    assert all(item.value == "" and item.codes == {} for item in grant._items.values())
+
+
+def test_a_granted_value_is_not_in_what_its_item_prints_as():
+    item = caps._Item(entry="github", field="password", value=GITHUB_PASSWORD, period=30, codes={60000000: "492039"})
+    for shown in (repr(item), str(item), f"{item}", f"{[item]}", f"{ {'A': item} }"):
+        assert GITHUB_PASSWORD not in shown and "492039" not in shown
+
+
+def test_what_describes_a_capability_cannot_be_edited_once_made(vault):
+    session = caps.create_session(vault)
+    _, info = caps.create_grant(vault, ["GITHUB_TOKEN"])
+    header = caps._Header.from_bytes(cap_path(session).read_bytes(), id_of(session))
+    item = caps._Item(entry="github", field="password")
+
+    for thing, field in ((caps.list_caps()[0], "expires"), (info, "references"), (header, "expires"), (item, "value")):
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            setattr(thing, field, None)
+
+
+# -- what a session token alone says, and the grants made under a session ----
+
+
+def test_the_end_of_a_session_is_read_from_its_token_and_from_nothing_else(vault, clock):
+    session = caps.create_session(vault, ttl=1200)
+    grant, _ = caps.create_grant(vault, ["GITHUB_TOKEN"])
+
+    assert caps.session_expires(session) == T0 + 1200
+    assert caps.session_expires(grant) is None
+    assert caps.session_expires("not a token") is None
+    # A session token that names a grant's file: the kind is in the file as well, and must agree.
+    assert caps.session_expires(make_token("session", bytes.fromhex(id_of(grant)), os.urandom(32))) is None
+    assert caps.session_expires(make_token("session", os.urandom(16), os.urandom(32))) is None
+
+    cap_path(session).write_bytes(cap_path(session).read_bytes()[:-2])
+    assert caps.session_expires(session) is None
+    caps.end_sessions(session)
+    assert caps.session_expires(session) is None
+
+
+def test_the_mark_of_a_session_is_the_first_twelve_characters_of_its_id(vault):
+    session = caps.create_session(vault)
+    grant, _ = caps.create_grant(vault, ["GITHUB_TOKEN"])
+
+    assert caps.session_mark(session) == f"[session {id_of(session)[:12]}]"
+    assert caps.SESSION_MARK.search("ci run " + caps.session_mark(session))
+    with pytest.raises(AuthError, match="that is a grant token, not a session token"):
+        caps.session_mark(grant)
+
+
+def test_ending_a_session_revokes_the_grants_made_under_it_and_no_other(vault):
+    session = caps.create_session(vault)
+    other = caps.create_session(vault, label="not a grant " + caps.session_mark(session))
+    mark = caps.session_mark(session)
+    under, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], label="ci run " + mark, uses=None)
+    bare, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], label=mark, uses=None)
+    of_another, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], label="ci run " + caps.session_mark(other), uses=None)
+    unmarked, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], label="ci run", uses=None)
+    mentioned, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], label=mark + " and more", uses=None)
+
+    assert caps.end_sessions(session, vault=vault) == 1
+
+    for gone in (session, under, bare):
+        assert not cap_path(gone).exists()
+    for kept in (other, of_another, unmarked, mentioned):
+        assert cap_path(kept).exists()
+    with pytest.raises(AuthError):
+        caps.open_grant(under)
+    assert caps.open_grant(of_another).value("GITHUB_TOKEN") == GITHUB_PASSWORD
+    ended = [(event.action, event.target) for event in audit.read(vault)
+             if event.action in ("session.end", "grant.revoke")]
+    assert len(ended) == 3 and ended[0] == ("session.end", id_of(session))
+    assert sorted(ended[1:]) == sorted([("grant.revoke", id_of(under)), ("grant.revoke", id_of(bare))])
+    assert audit.verify(vault).ok
+
+
+def test_ending_every_session_revokes_the_grants_made_under_each(vault):
+    first, second = caps.create_session(vault), caps.create_session(vault)
+    under_first, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], label="a " + caps.session_mark(first))
+    under_second, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], label="b " + caps.session_mark(second))
+    unmarked, _ = caps.create_grant(vault, ["GITHUB_TOKEN"])
+
+    assert caps.end_sessions() == 2
+
+    assert [cap.id for cap in caps.list_caps()] == [id_of(unmarked)]
+    assert caps.end_sessions() == 0
+    assert [cap.id for cap in caps.list_caps()] == [id_of(unmarked)]
+
+
+# -- every copy of a secret that is made on the way is handed to the wipe -----
+
+
+@pytest.fixture
+def handed_to_wipe(monkeypatch) -> List[tuple]:
+    """What caps passes to wipe_bytes, as (kind, content at that moment), before the real wipe runs."""
+    seen: List[tuple] = []
+    real = caps.wipe_bytes
+
+    def record(data: Any) -> Any:
+        if isinstance(data, str):
+            seen.append(("str", data.encode("utf-8")))
+        else:
+            seen.append((type(data).__name__, bytes(bytearray(data))))
+        return real(data)
+
+    monkeypatch.setattr(caps, "wipe_bytes", record)
+    return seen
+
+
+def secret_of(token: str) -> bytes:
+    return bytes(bytearray(caps.parse_token(token)[2]))
+
+
+def test_the_secret_of_a_token_is_wiped_by_everything_that_takes_a_token(vault, handed_to_wipe):
+    session = caps.create_session(vault)
+    assert ("bytes", secret_of(session)) in handed_to_wipe  # the copy the token was written from
+    grant, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], uses=None)
+    assert ("bytes", secret_of(grant)) in handed_to_wipe
+
+    calls: Dict[str, Callable[[], Any]] = {
+        "open_session": lambda: caps.open_session(session, vault.file).wipe(),
+        "session_expires": lambda: caps.session_expires(session),
+        "session_mark": lambda: caps.session_mark(session),
+        "open_grant": lambda: caps.open_grant(grant).close(),
+        "looking at a grant": lambda: caps.open_grant(grant, consume=False).close(),
+        "end_sessions": lambda: caps.end_sessions(session),
+    }
+    for name, call in calls.items():
+        secret = secret_of(grant if "grant" in name else session)
+        del handed_to_wipe[:]
+        call()
+        assert ("bytes", secret) in handed_to_wipe, name
+
+
+def test_making_a_grant_wipes_every_copy_of_what_it_seals(vault, handed_to_wipe):
+    token, _ = caps.create_grant(vault, ["GITHUB_TOKEN"])
+    sealed = plaintext_of(token)
+    key_text = json.loads(sealed)["audit_key"].encode("ascii")
+    value = GITHUB_PASSWORD.encode("ascii")
+    assert value in sealed and len(key_text) == 44
+
+    texts = [content for kind, content in handed_to_wipe if kind == "str" and value in content]
+    assert len(texts) == 1 and key_text not in texts[0]  # the JSON text, made before the audit key is added
+    assert ("bytes", texts[0]) in handed_to_wipe  # its encoding
+    assert ("bytes", key_text) in handed_to_wipe  # the audit key as text
+    assert ("bytearray", sealed) in handed_to_wipe  # the whole payload
+    padded = [content for kind, content in handed_to_wipe if kind != "str" and sealed in content and content != sealed]
+    assert len(padded) == 1 and len(padded[0]) % 256 == 0
+
+
+@pytest.mark.parametrize("consume", [True, False])
+def test_opening_a_grant_wipes_every_copy_of_what_it_unsealed(vault, handed_to_wipe, consume):
+    token, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], uses=None)
+    sealed = plaintext_of(token)
+    key_text = json.loads(sealed)["audit_key"].encode("ascii")
+    del handed_to_wipe[:]
+
+    caps.open_grant(token, consume=consume).close()
+
+    assert ("str", sealed) in handed_to_wipe  # the JSON text
+    assert sum(1 for kind, content in handed_to_wipe if kind != "str" and content == sealed) == 1  # and its bytes
+    padded = [content for kind, content in handed_to_wipe if kind != "str" and sealed in content and content != sealed]
+    assert len(padded) == 1 and len(padded[0]) % 256 == 0
+    assert ("str", key_text) in handed_to_wipe and ("bytes", key_text) in handed_to_wipe
+    assert ("bytes", base64.b64decode(key_text)) in handed_to_wipe
+
+
+def test_an_expired_grant_that_is_presented_has_what_was_unsealed_from_it_wiped(vault, clock, handed_to_wipe):
+    token, _ = caps.create_grant(vault, ["GITHUB_TOKEN"], ttl=60)
+    sealed = plaintext_of(token)
+    clock.advance(60)
+    del handed_to_wipe[:]
+
+    with pytest.raises(AuthError, match="expired"):
+        caps.open_grant(token)
+
+    padded = [content for kind, content in handed_to_wipe if kind != "str" and sealed in content and content != sealed]
+    assert len(padded) == 1 and len(padded[0]) % 256 == 0
+    assert ("bytes", secret_of(token)) in handed_to_wipe
+
+
+# -- the device key ----------------------------------------------------------
+
+
+def test_the_device_key_is_never_asked_for_in_a_way_that_could_put_a_question_to_the_owner(vault, monkeypatch):
+    """A session or a grant is used by a program, often with nobody there: no prompt, no dialog."""
+    backend = caps.devices.get_backend("software")
+    real = backend.unseal
+    asked: List[Dict[str, Any]] = []
+
+    def unseal(descriptor: Dict[str, Any], **settings: Any) -> Any:
+        asked.append(settings)
+        return real(descriptor, **settings)
+
+    monkeypatch.setattr(backend, "unseal", unseal)
+    session = caps.create_session(vault)
+    grant, _ = caps.create_grant(vault, ["GITHUB_TOKEN"])
+    caps.open_session(session, vault.file).wipe()
+    caps.open_grant(grant).close()
+
+    assert len(asked) >= 3
+    assert all(settings["interactive"] is False and settings["auth"] is None for settings in asked)
+
+
+def test_a_backend_that_cannot_be_loaded_means_the_capability_is_not_of_this_machine(vault, monkeypatch):
+    session = caps.create_session(vault)
+    grant, _ = caps.create_grant(vault, ["GITHUB_TOKEN"])
+    before = cap_path(grant).read_bytes()
+
+    def unavailable(name: str) -> Any:
+        raise IronDomeError(f"the {name} backend cannot be loaded here")
+
+    monkeypatch.setattr(caps.devices, "get_backend", unavailable)
+    with pytest.raises(AuthError, match="that session token cannot be used here: the session belongs to another"):
+        caps.open_session(session, vault.file)
+    with pytest.raises(AuthError, match="that grant token cannot be used here: the grant belongs to another"):
+        caps.open_grant(grant)
+    assert cap_path(grant).read_bytes() == before
+
+
+def test_a_device_key_the_backend_describes_wrongly_is_refused_and_destroyed_again(vault, monkeypatch):
+    backend = caps.devices.get_backend("software")
+    real = backend.enroll
+    made: List[Dict[str, Any]] = []
+
+    def enroll(**settings: Any) -> Any:
+        descriptor, raw = real(**settings)
+        made.append(dict(descriptor))
+        return dict(descriptor, surprise="not a field of a descriptor"), raw
+
+    monkeypatch.setattr(backend, "enroll", enroll)
+    with pytest.raises(caps.HardwareError, match="made a device key that sessions and grants cannot be bound to"):
+        caps.create_session(vault)
+
+    assert len(made) == 1 and not backend.exists(made[0])
+    assert "cap_device" not in vault.meta and caps.list_caps() == []
+
+
+def test_the_key_made_for_a_binding_that_cannot_be_recorded_is_wiped(vault, monkeypatch):
+    real = caps._derived_device_key
+    derived: List[Any] = []  # held here, so nothing but an explicit wipe can zero them
+
+    def derive(raw: Any, vault_id: bytes) -> Any:
+        derived.append(real(raw, vault_id))
+        return derived[-1]
+
+    def refuse(*arguments: Any, **settings: Any) -> None:
+        raise VaultError("the index could not be written")
+
+    monkeypatch.setattr(caps, "_derived_device_key", derive)
+    monkeypatch.setattr(caps, "_record", refuse)
+    with pytest.raises(VaultError, match="the index could not be written"):
+        caps._bound_device(vault)
+
+    assert len(derived) == 1 and derived[0].wiped
+
+
+def test_only_what_is_a_file_itself_counts_as_the_staging_file_of_a_rekey(vault, tmp_path):
+    home = paths.home()
+    real = home / f"{caps.REKEY_STAGING_PREFIX}real{caps.REKEY_STAGING_SUFFIX}"
+    real.write_bytes(b"staged")
+    (home / f"{caps.REKEY_STAGING_PREFIX}directory{caps.REKEY_STAGING_SUFFIX}").mkdir()
+    target = tmp_path / "elsewhere"
+    target.write_bytes(b"not IronDome's")
+    if os.name != "nt":
+        (home / f"{caps.REKEY_STAGING_PREFIX}link{caps.REKEY_STAGING_SUFFIX}").symlink_to(target)
+    (home / f"{caps.REKEY_STAGING_PREFIX}other.txt").write_bytes(b"another suffix")
+
+    assert caps.rekey_staging_files() == [real]
+
+
+@pytest.mark.parametrize("failure, reason", [
+    (PermissionError(errno.EACCES, "Permission denied"), "Permission denied"),
+    (OSError(), "OSError"),
+])
+def test_a_capability_directory_that_cannot_be_listed_is_reported_with_the_reason(vault, monkeypatch, failure, reason):
+    def refuse() -> Any:
+        raise failure
+
+    monkeypatch.setattr(caps, "_capability_files", refuse)
+    with pytest.raises(VaultError, match=rf"could not be read \({reason}\)$"):
+        caps.list_caps()
+
+
+def test_destroying_everything_names_five_of_the_files_that_would_not_go(vault, monkeypatch):
+    for _ in range(7):
+        caps.create_session(vault)
+    names = sorted(path.name for _, path in caps._capability_files())
+    monkeypatch.setattr(caps, "_destroy_quietly", lambda path: False)
+
+    with pytest.raises(VaultError) as raised:
+        caps.destroy_all()
+
+    assert "7 capability files" in str(raised.value)
+    assert re.findall(r"[0-9a-f]{32}\.json", str(raised.value)) == names[:5]
+
+
+def test_a_grant_holds_values_up_to_the_largest_payload_exactly(vault, monkeypatch):
+    first, _ = caps.create_grant(vault, ["GITHUB_TOKEN"])
+    size = len(plaintext_of(first))
+
+    monkeypatch.setattr(caps, "_MAX_PAYLOAD", size)
+    token, _ = caps.create_grant(vault, ["GITHUB_TOKEN"])
+    assert caps.open_grant(token).value("GITHUB_TOKEN") == GITHUB_PASSWORD
+
+    monkeypatch.setattr(caps, "_MAX_PAYLOAD", size - 1)
+    with pytest.raises(UsageError, match=f"come to {size} bytes and a grant holds at most {size - 1}"):
+        caps.create_grant(vault, ["GITHUB_TOKEN"])

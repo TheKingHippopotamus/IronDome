@@ -323,6 +323,13 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
         certificate); a line with spaces in it, and the lines that open and
         close a PEM block, are ordinary text and are left alone.
 
+    A value that begins or ends with white space (a token pasted with its
+    line break, a field of an imported file that ends in a space) is followed
+    by all of the above for the value without that white space, under the
+    same two lengths. That is the text that gets printed: ``$(...)`` drops the
+    line breaks at the end of what it captures, and most programs trim what
+    they read.
+
     Duplicates are dropped: a value made only of letters and digits is its
     own percent, JSON, shell and repr form. A value shorter than
     :data:`MIN_MASK_BYTES` gives an empty list. Raises :class:`UsageError` if
@@ -334,6 +341,21 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
         raw = value.encode("utf-8")
     except UnicodeEncodeError:
         raise UsageError("a secret value must be valid Unicode text") from None
+    forms = _forms_of(value, raw)
+    trimmed = value.strip()
+    if forms and trimmed != value:
+        forms += _forms_of(trimmed, trimmed.encode("utf-8"))
+    seen: Set[bytes] = set()
+    unique: List[Tuple[str, bytes]] = []
+    for label, pattern in forms:
+        if pattern not in seen:
+            seen.add(pattern)
+            unique.append((label, pattern))
+    return unique
+
+
+def _forms_of(value: str, raw: bytes) -> List[Tuple[str, bytes]]:
+    """What :func:`secret_patterns` lists for one text, *raw* as UTF-8: duplicates and all."""
     if len(raw) < MIN_MASK_BYTES:
         return []
     forms: List[Tuple[str, bytes]] = [("plain", raw)]
@@ -387,13 +409,7 @@ def secret_patterns(value: str) -> List[Tuple[str, bytes]]:
         lines = [line.strip() for line in raw.splitlines()]
         if len(lines) > 1:
             forms += [("line", line) for line in lines if _is_secret_line(line)]
-    seen: Set[bytes] = set()
-    unique: List[Tuple[str, bytes]] = []
-    for label, pattern in forms:
-        if pattern not in seen:
-            seen.add(pattern)
-            unique.append((label, pattern))
-    return unique
+    return forms
 
 
 class Masker:

@@ -79,6 +79,34 @@ def test_captured_output_in_json_is_masked_too(cli):
     assert_masked(report["stderr"])
 
 
+#: Two spaces after it, as a field of an imported file or a pasted value can have; the vault keeps them.
+KEPT_WITH_SPACES = "tok3n/kept+with=two-spaces-after  "
+TRIMMING_CHILD = (
+    "import base64, json, os\n"
+    "v = os.environ['TOKEN']\n"
+    "t = v.strip()\n"
+    "assert t != v, 'the value arrived without its spaces'\n"
+    "print('reading the token:', t, 'done'); print(base64.b64encode(t.encode()).decode())\n"
+    "print(json.dumps({'token': t}))\n"
+)
+
+
+def test_a_secret_kept_with_white_space_around_it_is_masked_when_it_is_printed_without(cli):
+    """Most programs trim what they read, and `$(...)` drops line breaks: what is printed is the value without."""
+    init(cli)
+    add(cli, "service", KEPT_WITH_SPACES, "--alias", "SERVICE_TOKEN")
+    token = grant(cli, "SERVICE_TOKEN")["token"]
+    ran = ok(cli("run", "--env", "TOKEN=SERVICE_TOKEN", "--", sys.executable, "-c", TRIMMING_CHILD,
+                 env={"IRONDOME_GRANT": token}))
+    trimmed = KEPT_WITH_SPACES.strip()
+    assert trimmed not in ran.stdout and base64.b64encode(trimmed.encode()).decode() not in ran.stdout
+    assert ran.stdout.splitlines() == [
+        "reading the token: [irondome:TOKEN] done",
+        "[irondome:TOKEN]",
+        '{"token": "[irondome:TOKEN]"}',
+    ]
+
+
 def test_the_mcp_server_returns_names_and_masked_output_never_values(cli):
     setup(cli)
     token = grant(cli, "GITHUB_TOKEN", args=("--uses", "5"))["token"]

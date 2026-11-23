@@ -37,9 +37,11 @@ scan looks for thousands of byte strings at once. They are grouped by their
 first byte; for each group one regular expression, built as a trie of the
 patterns' first eight bytes, finds candidate positions at C speed, and each
 candidate is compared with the full patterns that start that way. Every
-pattern of a value of eight or more characters is at least eight bytes long.
-Shorter values are not looked for at all: they turn up by chance in ordinary
-text.
+pattern looked for is at least eight bytes long: every pattern of a value of
+eight or more characters is, and of a value kept with white space around it,
+what is left without that white space is looked for only when it is that long
+too. Shorter values are not looked for at all: they turn up by chance in
+ordinary text.
 
 What it cannot find
 -------------------
@@ -241,6 +243,8 @@ class _Needles:
             except UsageError:
                 continue  # not valid Unicode text: no UTF-8 file can contain it
             for encoding, pattern in forms:
+                if len(pattern) < MIN_SECRET_CHARS:
+                    continue  # the value without the white space around it, when that is too short to look for
                 labels = owners.setdefault(pattern, [])
                 label = (item.entry, item.field, encoding)
                 if label not in labels:

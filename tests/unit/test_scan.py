@@ -474,3 +474,34 @@ def test_hundreds_of_secrets_over_megabytes_take_seconds_not_minutes(tmp_path: P
 
     assert time.monotonic() - started < 60
     assert [(hit.entry, hit.line) for hit in hits] == [("entry-123", 30001)]
+
+
+# ---------------------------------------------------------------------------
+# A value kept with white space around it
+# ---------------------------------------------------------------------------
+
+
+def test_a_value_kept_with_white_space_around_it_is_found_where_it_was_written_without(tmp_path: Path) -> None:
+    kept = SecretValue("service", "password", "tok3n-abcdefgh-12345678\n")
+    write(
+        tmp_path / "log.txt",
+        b"Bearer tok3n-abcdefgh-12345678 and more\n" + base64.b64encode(b"tok3n-abcdefgh-12345678") + b"\n",
+    )
+
+    hits = scan_paths([tmp_path], [kept]).hits
+
+    assert sorted(located(hits)) == [
+        ("log.txt", 1, "service", "password", "plain"),
+        ("log.txt", 2, "service", "password", "base64"),
+    ]
+
+
+def test_what_is_left_of_a_value_without_its_white_space_is_looked_for_from_eight_bytes_only(tmp_path: Path) -> None:
+    """Ten characters with the white space, seven without: looked for as it is, and not as the seven."""
+    write(tmp_path / "f.txt", b"abcdefg here\nABCDEFGH there\nabcdefg  \n")
+    secrets = [SecretValue("a", "pin", "abcdefg  \n"), SecretValue("b", "pin", "ABCDEFGH  \n")]
+
+    hits = scan_paths([tmp_path], secrets).hits
+
+    assert sorted(located(hits)) == [("f.txt", 2, "b", "pin", "plain"), ("f.txt", 3, "a", "pin", "plain")]
+    assert all(len(pattern) >= scan.MIN_SECRET_CHARS for pattern in scan._Needles(secrets).owners)

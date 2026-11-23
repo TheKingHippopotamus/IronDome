@@ -1325,3 +1325,79 @@ def test_secure_enclave_nuke_leaves_a_restored_copy_of_the_vault_directory_dead(
         reopen()
     with open_vault(recovery_key=recovery) as recovered:
         assert recovered.value(recovered.find("github")) == GITHUB_PASSWORD
+
+
+# --- What a change of one line in destroy_device would have got past the tests above ---
+
+
+def test_a_backend_whose_own_probe_fails_is_one_that_cannot_be_asked_and_its_secret_is_not_touched(vault, monkeypatch):
+    """The probe itself raising is the same answer as "not available": the secret may still be in the chip."""
+    caps.create_session(vault)
+    recorded = dict(bound(vault))
+    backend = device.get_backend("software")
+    asked_to_destroy: List[Dict[str, Any]] = []
+
+    def cannot_tell(descriptor: Dict[str, Any]) -> bool:
+        raise HardwareError("the TPM did not answer")
+
+    def broken_probe() -> Probe:
+        raise HardwareError("tpm2-tools is not installed")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backend, "exists", cannot_tell)
+        patch.setattr(backend, "probe", broken_probe)
+        patch.setattr(backend, "destroy", asked_to_destroy.append)
+        with pytest.raises(HardwareError) as caught:
+            caps.destroy_device(vault)
+
+    assert str(caught.value) == (
+        "the software device key of this vault's sessions and grants could not be checked: the TPM did not answer"
+    )
+    assert asked_to_destroy == [] and key_of(recorded).exists()
+    assert caps.destroy_device(vault) == 1, "once it answers, it goes"
+
+
+def test_a_device_key_that_is_still_there_after_its_destruction_is_reported_and_not_counted(vault, monkeypatch):
+    caps.create_session(vault)
+    recorded = dict(bound(vault))
+    backend = device.get_backend("software")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backend, "destroy", lambda descriptor: None)  # says nothing, destroys nothing
+        with pytest.raises(HardwareError) as caught:
+            caps.destroy_device(vault)
+
+    assert str(caught.value) == "the software device key of this vault's sessions and grants survived destruction"
+    assert key_of(recorded).exists()
+    assert caps.destroy_device(vault) == 1
+
+
+def test_two_device_keys_that_would_not_go_are_counted_and_both_reasons_given(vault, tmp_path, monkeypatch):
+    caps.create_session(vault)
+    old = dict(bound(vault))
+    hidden = tmp_path / "moved-away.key"
+    os.rename(str(key_of(old)), str(hidden))
+    caps.create_session(vault)
+    os.rename(str(hidden), str(key_of(old)))
+    new = dict(bound(vault))
+    backend = device.get_backend("software")
+
+    def stubborn(descriptor: Dict[str, Any]) -> None:
+        which = "the newer" if descriptor["ref"] == new["ref"] else "the older"
+        raise HardwareError(f"could not destroy {which} device key")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(backend, "destroy", stubborn)
+        with pytest.raises(HardwareError) as caught:
+            caps.destroy_device(vault)
+
+    message = str(caught.value)
+    assert message.startswith(
+        "2 of the 2 device keys of this vault's sessions and grants could not be destroyed (0 were): "
+    )
+    assert sorted(message.split(": ", 1)[1].split("; ")) == [
+        "could not destroy the newer device key",
+        "could not destroy the older device key",
+    ]
+    assert key_of(new).exists() and key_of(old).exists()
+    assert caps.destroy_device(vault) == 2

@@ -2035,3 +2035,711 @@ def test_what_bash_printf_q_writes_is_a_pattern(value: str) -> None:
 def test_a_value_with_a_control_character_gets_no_bash_form() -> None:
     """bash writes such a value as ``$'...'``, another style: said in the claim, not pretended here."""
     assert runner._bash_quoted("tab\there") == []
+
+
+# ---------------------------------------------------------------------------
+# A value kept with white space around it
+# ---------------------------------------------------------------------------
+
+#: Kept as they came: a token pasted with its line break, a field of an imported file, a line of a config file.
+KEPT_WITH_WHITE_SPACE = [
+    "tok3n-abcdefgh-12345678\n",
+    "  tok3n-abcdefgh-12345678",
+    "\ttok3n abc/12345678+xyz \r\n",
+    "pässwörd-with-ümlauts\n\n",
+]
+
+
+@pytest.mark.parametrize("value", KEPT_WITH_WHITE_SPACE)
+def test_a_value_kept_with_white_space_around_it_is_masked_where_it_is_printed_without(value):
+    """`$(...)` drops the line breaks at the end, and most programs trim what they read: that is what is printed."""
+    trimmed = value.strip()
+    raw = trimmed.encode("utf-8")
+    assert trimmed != value
+    printed = [
+        raw,
+        base64.b64encode(raw),
+        base64.urlsafe_b64encode(raw).rstrip(b"="),
+        raw.hex().encode(),
+        urllib.parse.quote(trimmed, safe="").encode(),
+        json.dumps(trimmed)[1:-1].encode(),
+        json.dumps(trimmed, ensure_ascii=False)[1:-1].encode(),
+    ]
+    for form in printed:
+        assert mask_whole({"TOKEN": value}, b"Authorization: <" + form + b"> end\n") == (
+            b"Authorization: <[irondome:TOKEN]> end\n"
+        ), form
+    inside = mask_whole({"TOKEN": value}, base64.b64encode(b"user:" + raw + b"\n"))
+    assert b"[irondome:TOKEN]" in inside and len(inside) < len(b"[irondome:TOKEN]") + 12
+
+
+def test_a_value_printed_with_its_white_space_is_one_placeholder_and_the_white_space_goes_with_it():
+    secrets = {"TOKEN": "tok3n-abcdefgh\n"}
+    assert mask_whole(secrets, b"a tok3n-abcdefgh\nb") == b"a [irondome:TOKEN]b"
+    assert mask_whole(secrets, b"a tok3n-abcdefgh b") == b"a [irondome:TOKEN] b"
+
+
+def test_the_patterns_of_a_value_begin_with_the_value_as_it_is_and_hold_those_of_what_is_left_without_white_space():
+    for value in KEPT_WITH_WHITE_SPACE:
+        patterns = secret_patterns(value)
+        assert patterns[0] == ("plain", value.encode("utf-8"))
+        assert len({pattern for _, pattern in patterns}) == len(patterns)
+        without = {pattern for _, pattern in secret_patterns(value.strip())}
+        assert without < {pattern for _, pattern in patterns}
+    assert "line" not in [label for label, _ in secret_patterns("x" * 24 + "\n")], "one line: nothing is a line of it"
+    assert ("plain", b"x" * 24) in secret_patterns("x" * 24 + "\n")
+
+
+def test_what_is_left_of_a_value_without_its_white_space_is_masked_under_the_same_two_lengths():
+    assert secret_patterns("  \n") == []
+    assert secret_patterns("   \n") == [("plain", b"   \n")]
+    assert secret_patterns("ab\n\n") == [("plain", b"ab\n\n")]
+    assert secret_patterns("abc \n") == [("plain", b"abc \n")], "three bytes are left: too short to mask"
+    assert secret_patterns("abcd \n") == [("plain", b"abcd \n"), ("plain", b"abcd")]
+    seven = secret_patterns(" abcdefg")  # eight bytes as it is, so its encodings; seven without the space, so itself
+    assert ("base64", base64.b64encode(b" abcdefg")) in seven and ("plain", b"abcdefg") in seven
+    assert base64.b64encode(b"abcdefg") not in [pattern for _, pattern in seven]
+    assert b"abcdefg".hex().encode() not in [pattern for _, pattern in seven]
+    eight = secret_patterns("abcdefgh\n")
+    assert ("base64", base64.b64encode(b"abcdefgh")) in eight and ("hex", b"abcdefgh".hex().encode()) in eight
+
+
+def test_a_variable_that_holds_a_text_exactly_names_it_before_one_that_holds_it_with_white_space():
+    secrets = {"A_KEPT_WITH_ITS_LINE_BREAK": "tok3n-abcdefgh\n", "B_EXACT": "tok3n-abcdefgh"}
+    assert mask_whole(secrets, b"<tok3n-abcdefgh>") == b"<[irondome:B_EXACT]>"
+    assert mask_whole(secrets, b"<tok3n-abcdefgh\n>") == b"<[irondome:A_KEPT_WITH_ITS_LINE_BREAK]>"
+
+
+# ---------------------------------------------------------------------------
+# What a change of one line would have got past the tests above
+# ---------------------------------------------------------------------------
+
+
+def test_a_timeout_says_what_happened_and_carries_the_output_so_far():
+    so_far = RunResult(code=-15, stdout="so far", stderr="", truncated=False)
+    error = CommandTimeoutError("the command was stopped after 2 seconds", so_far)
+    assert str(error) == "the command was stopped after 2 seconds" and error.result is so_far
+    assert CommandTimeoutError("stopped").result is None and error.exit_code == 124
+
+
+def test_what_a_captured_run_hands_back_cannot_be_edited():
+    result = RunResult(code=0, stdout="[irondome:TOKEN]", stderr="", truncated=False)
+    with pytest.raises(AttributeError):
+        result.stdout = "something else"  # type: ignore[misc]
+
+
+def test_a_line_is_masked_by_itself_from_twenty_bytes_and_not_one_less():
+    assert runner.MIN_LINE_BYTES == 20
+    twenty, nineteen = "L" * 20, "S" * 19
+    labels = {pattern: label for label, pattern in secret_patterns(f"{twenty}\n{nineteen}\nand a third line")}
+    assert labels[twenty.encode()] == "line" and nineteen.encode() not in labels
+    assert runner._is_secret_line(twenty.encode()) and not runner._is_secret_line(nineteen.encode())
+
+
+def test_a_line_that_opens_or_closes_a_block_is_never_masked_by_itself_whichever_end_says_so():
+    assert not runner._is_secret_line(b"-----BEGIN-OPENSSH-PRIVATE-KEY")
+    assert not runner._is_secret_line(b"END-OPENSSH-PRIVATE-KEY-----")
+    assert not runner._is_secret_line(b"-----BEGIN-CERTIFICATE-----")
+    assert runner._is_secret_line(b"----four-hyphens-do-not-open-a-block")
+    assert not runner._is_secret_line(b"a-line-with-one space-in-it-however-long")
+    assert not runner._is_secret_line(b"a-line-with-one\ttab-in-it-however-long")
+
+
+def test_a_value_with_a_control_character_gets_no_printf_q_form_and_every_other_value_does():
+    assert runner._bash_quoted("a value\x7fwith DEL") == []
+    assert runner._bash_quoted("a value\x1fwith a unit separator") == []
+    assert set(runner._bash_quoted("caf\u0080 au lait")) == {"caf\u0080\\ au\\ lait".encode()}
+    assert set(runner._bash_quoted("a b")) == {b"a\\ b"}
+
+
+def test_a_tilde_is_given_with_and_without_its_backslash_because_bash_3_leaves_it_alone():
+    assert set(runner._bash_quoted("~/keys and more")) == {b"~/keys\\ and\\ more", b"\\~/keys\\ and\\ more"}
+    assert set(runner._bash_quoted("DIRS=~/bin:~/go a~b")) == {
+        b"DIRS=~/bin:~/go\\ a~b",
+        b"DIRS=\\~/bin:\\~/go\\ a~b",
+    }
+    for printed in (b"~/keys\\ and\\ more", b"\\~/keys\\ and\\ more"):
+        assert mask_whole({"HOME_KEYS": "~/keys and more"}, b"declare -- x=" + printed + b"\n") == (
+            b"declare -- x=[irondome:HOME_KEYS]\n"
+        )
+
+
+def test_json_carried_inside_json_is_masked_with_its_other_alphabets_written_either_way_at_either_level():
+    value = 'pässwörd "quoted" \\ ünïcode'
+    literal, escaped = json.dumps(value, ensure_ascii=False)[1:-1], json.dumps(value)[1:-1]
+    carried = [json.dumps(literal, ensure_ascii=False), json.dumps(literal), json.dumps(escaped)]
+    assert len(set(carried)) == 3
+    for text in carried:
+        body = text[1:-1].encode("utf-8")
+        assert ("json", body) in secret_patterns(value)
+        assert mask_whole({"T": value}, b'{"doc": "{\\"k\\": \\"' + body + b'\\"}"}') == (
+            b'{"doc": "{\\"k\\": \\"[irondome:T]\\"}"}'
+        )
+
+
+def test_a_placeholder_that_is_not_text_is_refused_as_that():
+    with pytest.raises(UsageError, match="the placeholder must be text"):
+        Masker({"TOKEN": "abcdefgh"}, placeholder=5)  # type: ignore[arg-type]
+
+
+def test_a_secret_whose_first_bytes_repeat_is_held_back_from_the_right_place():
+    """`aaab` at the end of a chunk: the value may begin at its second `a`, and that is where the wait begins."""
+    secrets = {"TOKEN": "aab-secret-1"}
+    for cut in range(1, len(b"x aaab-secret-1 y")):
+        masker = Masker(secrets)
+        data = b"x aaab-secret-1 y"
+        assert masker.feed(data[:cut]) + masker.feed(data[cut:]) + masker.flush() == b"x a[irondome:TOKEN] y", cut
+    masker = Masker(secrets)
+    assert masker.feed(b"x aaab-s") == b"x a", "the rest could still be the secret"
+
+
+def test_a_secret_that_ends_where_another_one_may_have_begun_is_still_masked_whole():
+    """`ABCDEFGH` at the end of a chunk, and another secret that begins `BCDEFGH`: the wait for the
+    second one starts inside the first, and the first is complete and is masked all the same."""
+    secrets = {"FIRST": "ABCDEFGH", "SECOND": "BCDEFGHX"}
+    data = b"ABCDEFGH--ABCDEFGH"
+    masker = Masker(secrets)
+    assert masker.feed(data) + masker.flush() == b"[irondome:FIRST]--[irondome:FIRST]"
+    for cut in range(1, len(data)):
+        masker = Masker(secrets)
+        assert masker.feed(data[:cut]) + masker.feed(data[cut:]) + masker.flush() == (
+            b"[irondome:FIRST]--[irondome:FIRST]"
+        ), cut
+
+
+# --- The child's environment ---
+
+
+@posix_only
+def test_an_inherited_variable_that_is_not_utf_8_is_passed_on_and_a_secret_that_is_not_is_refused():
+    """A value the system handed over as bytes that are not UTF-8 is still a value a process can be given;
+    a secret has to be masked, and what is not text cannot be."""
+    legacy = b"caf\xe9".decode("utf-8", "surrogateescape")
+    assert runner._environment({}, None, {"LEGACY": legacy}) == {"LEGACY": legacy}
+    assert runner._environment({}, {"LEGACY": legacy}, {}) == {"LEGACY": legacy}
+    with pytest.raises(UsageError, match="the name or value of TOKEN is not valid Unicode text"):
+        runner._environment({"TOKEN": legacy}, None, {})
+
+
+@posix_only
+def test_names_that_differ_only_in_their_case_are_different_variables_and_keep_their_spelling():
+    """`http_proxy` and `HTTP_PROXY` are two variables here, and a program looks for the one it knows."""
+    inherited = {"http_proxy": "lower", "HTTP_PROXY": "upper", "Path": "mixed"}
+    assert runner._environment({}, None, inherited) == inherited
+    assert runner._environment({"Token": "s3cret-value"}, {"no_proxy": "localhost"}, {"NO_PROXY": "*"}) == {
+        "NO_PROXY": "*",
+        "no_proxy": "localhost",
+        "Token": "s3cret-value",
+    }
+    assert runner._settable("irondome_agent_token", "value") == "irondome_agent_token"
+
+
+@posix_only
+def test_a_name_or_a_value_no_process_can_be_given_is_refused_when_asked_for_and_left_out_when_inherited():
+    lone = "\ud800"  # not even the bytes of a legacy encoding: nothing the system could have handed over
+    for name, value in (("BAD" + lone, "value"), ("NAME", "bad" + lone), ("=NAME", "value"), ("NA=ME", "value")):
+        assert runner._environment({}, None, {name: value, "KEPT": "yes"}) == {"KEPT": "yes"}
+        with pytest.raises(UsageError):
+            runner._environment({}, {name: value}, {})
+    assert runner._unusable("=NAME", "value") == "an environment variable needs a name, without '=' or NUL characters"
+    assert runner._unusable("BAD" + lone, "value") == f"the name or value of BAD{lone} is not valid Unicode text"
+    assert runner._unusable("NAME", "bad" + lone) == "the name or value of NAME is not valid Unicode text"
+
+
+def test_a_command_cannot_be_looked_for_from_a_directory_that_is_gone(monkeypatch):
+    def gone() -> str:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(os, "getcwd", gone)
+    with pytest.raises(UsageError, match="the current directory no longer exists; give a working directory"):
+        runner.locate_command("true", {"PATH": os.defpath}, None)
+
+
+# --- Carrying the streams ---
+
+
+def test_the_first_bytes_of_a_secret_at_the_very_end_of_the_output_are_written_when_the_stream_ends(
+    capfd: pytest.CaptureFixture,
+) -> None:
+    """They were held back in case the rest followed. It did not: they are output like any other."""
+    start = SECRET[:6]
+    tail = python(
+        "import sys; sys.stdout.write('ends with ' + sys.argv[1]); sys.stderr.write('and with ' + sys.argv[1])", start
+    )
+    result = run_captured(tail, {"TOKEN": SECRET}, timeout=PATIENCE)
+    assert (result.stdout, result.stderr) == ("ends with " + start, "and with " + start)
+    assert run_command(tail, {"TOKEN": SECRET}, timeout=PATIENCE) == 0
+    captured = capfd.readouterr()
+    assert (captured.out, captured.err) == ("ends with " + start, "and with " + start)
+
+
+def test_a_destination_that_is_full_is_waited_for_and_then_written_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    read_end, write_end = os.pipe()
+    waits: List[Tuple[object, ...]] = []
+    refusals = [BlockingIOError(), BlockingIOError()]
+    real_write = os.write
+
+    class Watching:
+        def __enter__(self) -> "Watching":
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+        def register(self, descriptor: int, events: int) -> None:
+            waits.append(("register", descriptor, events))
+
+        def select(self, timeout: Optional[float] = None) -> List[object]:
+            waits.append(("select", timeout))
+            return []
+
+    def write(descriptor: int, data: bytes) -> int:
+        if descriptor == write_end and refusals:
+            raise refusals.pop()
+        return real_write(descriptor, data)
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(runner.selectors, "SelectSelector", Watching)
+            patch.setattr(os, "write", write)
+            assert runner._write_all(write_end, b"all of it") is True
+        assert os.read(read_end, 100) == b"all of it"
+        assert waits == [("register", write_end, runner.selectors.EVENT_WRITE), ("select", 1.0)] * 2
+    finally:
+        os.close(read_end)
+        os.close(write_end)
+
+
+def test_closing_the_plumbing_closes_both_ends_of_its_pipe_and_closes_nothing_the_second_time() -> None:
+    plumbing = runner._Plumbing()
+    read_end, write_end = plumbing._wake_read, plumbing._wake_write
+    plumbing.close()
+    for descriptor in (read_end, write_end):
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
+    reused = os.pipe()  # the numbers just freed are the first to be handed out again
+    try:
+        plumbing.close()
+        for descriptor in reused:
+            os.fstat(descriptor)
+    finally:
+        for descriptor in reused:
+            os.close(descriptor)
+    assert runner._Pump(None, None, -1).daemon is True  # type: ignore[arg-type]
+    with pytest.raises(IronDomeError, match="without the pipe IronDome asked for"):
+        runner._pipe(None)
+
+
+@posix_only
+def test_what_a_leftover_may_still_deliver_is_not_a_limit_on_a_command_that_is_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner, "_DRAIN_BYTES", 256 * 1024)  # more than a pipe holds when the command exits
+    megabyte = python("import sys\nfor _ in range(1024):\n    sys.stdout.write('x' * 1023 + '\\n')")
+    result = run_captured(megabyte, {"TOKEN": SECRET}, timeout=PATIENCE, max_bytes=2 * 1024 * 1024)
+    assert result.code == 0 and len(result.stdout) == 1024 * 1024 and not result.truncated
+
+
+HOLD_THE_INPUT = """
+    import os, subprocess
+    # It inherits our standard input, keeps it open and reads nothing from it.
+    holder = subprocess.Popen(["/bin/sleep", "75"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # A little of it is taken, so that there is room in the pipe again: less room than what is left to write.
+    taken = 0
+    while taken < 8192:
+        taken += len(os.read(0, 8192 - taken))
+    print(holder.pid, flush=True)
+"""
+
+
+@posix_only
+def test_input_that_nothing_reads_does_not_keep_the_run_waiting_for_what_the_command_left_behind() -> None:
+    threads = threading.active_count()
+    began = time.monotonic()
+    result = run_captured(python(HOLD_THE_INPUT), {}, stdin=b"x" * (4 * 1024 * 1024), timeout=PATIENCE)
+    elapsed = time.monotonic() - began
+    still_writing = threading.active_count() - threads
+    holder = int(result.stdout)
+    try:
+        assert result.code == 0
+        assert still_writing == 0, "the thread that wrote the input has ended when the run returns"
+        assert elapsed < PATIENCE / 2, "the run must end with the command, not when its input has been taken"
+        os.kill(holder, 0)  # still there, with the input it never read
+    finally:
+        os.kill(holder, signal.SIGKILL)
+
+
+def test_a_command_the_system_refuses_to_start_says_what_the_system_said(monkeypatch: pytest.MonkeyPatch) -> None:
+    def refused(*args: object, **options: object) -> None:
+        raise OSError(8, "Exec format error")
+
+    def refused_without_a_word(*args: object, **options: object) -> None:
+        raise OSError()
+
+    command = python("pass")
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "Popen", refused)
+        with pytest.raises(CommandNotExecutableError) as caught:
+            run_captured(command, {}, timeout=PATIENCE)
+    assert str(caught.value) == f"could not start {command[0]}: Exec format error"
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, "Popen", refused_without_a_word)
+        with pytest.raises(CommandNotExecutableError) as caught:
+            run_captured(command, {}, timeout=PATIENCE)
+    assert str(caught.value) == f"could not start {command[0]}: the operating system refused"
+
+
+# --- The process table ---
+
+PS_OUTPUT = (
+    b"    1     0\n  100     1\n  101   100\n  102   101\n  103   100\n  200     1\n"
+    b"\n  PID  PPID\n  300     x\n    x   100\n  301   100 extra\n  104\n"
+)
+
+
+@posix_only
+def test_without_a_proc_the_process_table_is_what_ps_prints_and_only_its_whole_lines_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    asked: List[Tuple[object, Dict[str, object]]] = []
+    real_isdir = os.path.isdir
+
+    def ps(command: object, **options: object) -> "subprocess.CompletedProcess[bytes]":
+        asked.append((command, options))
+        return subprocess.CompletedProcess([], 0, stdout=PS_OUTPUT, stderr=b"")
+
+    monkeypatch.setattr(os.path, "isdir", lambda path: False if path == "/proc/self" else real_isdir(path))
+    monkeypatch.setattr(subprocess, "run", ps)
+
+    assert runner._descendants(100) == [101, 103, 102], "nearest first, and 301 is not on a line of two numbers"
+    assert runner._descendants(1) == [100, 200, 101, 103, 102]
+    assert runner._descendants(102) == [] and runner._descendants(999) == []
+    assert asked[0] == (
+        ["/bin/ps", "-axo", "pid=,ppid="],
+        {
+            "stdin": subprocess.DEVNULL,
+            "capture_output": True,
+            "timeout": 3,
+            "env": {"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            "check": False,
+        },
+    )
+
+
+@posix_only
+@pytest.mark.parametrize(
+    "failure", [subprocess.TimeoutExpired("ps", 3), FileNotFoundError(2, "No such file or directory")], ids=repr
+)
+def test_a_ps_that_cannot_be_asked_means_no_descendant_is_found(
+    monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    real_isdir = os.path.isdir
+
+    def ps(command: object, **options: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(os.path, "isdir", lambda path: False if path == "/proc/self" else real_isdir(path))
+    monkeypatch.setattr(subprocess, "run", ps)
+    assert runner._descendants(os.getppid()) == []
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self"), reason="a system with /proc")
+def test_where_there_is_a_proc_the_process_table_is_read_from_it_and_no_program_is_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def started(*args: object, **options: object) -> None:
+        raise AssertionError("a program was started to read the process table")
+
+    monkeypatch.setattr(subprocess, "run", started)
+    assert os.getpid() in runner._descendants(os.getppid())
+
+
+# --- Stopping a command, and what it is told while it runs ---
+
+
+@posix_only
+def test_a_process_counts_as_alive_until_it_is_gone() -> None:
+    child = subprocess.Popen(["/bin/sleep", "600"])
+    try:
+        assert runner._alive(child.pid)
+    finally:
+        child.kill()
+        child.wait()
+    assert not runner._alive(child.pid)
+
+
+@posix_only
+def test_a_command_and_a_child_that_stop_when_asked_do_not_cost_the_whole_grace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(runner, "_TERMINATE_GRACE", 40.0)
+    family = python(
+        """
+        import subprocess, sys, time
+        child = subprocess.Popen(["/bin/sleep", "600"])
+        open(sys.argv[1], "w").write(str(child.pid))
+        time.sleep(600)
+        """,
+        str(tmp_path / "child"),
+    )
+    began = time.monotonic()
+    try:
+        with pytest.raises(CommandTimeoutError):
+            run_captured(family, {}, timeout=5.0)
+        elapsed = time.monotonic() - began
+        assert (tmp_path / "child").exists(), "the command had a child when its time was up"
+        assert elapsed < 30.0, "both stopped at once: nothing was left to wait for"
+    finally:
+        try:
+            os.kill(int((tmp_path / "child").read_text()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+
+
+@posix_only
+def test_a_command_asked_to_stop_is_given_the_time_to_finish_what_it_is_doing() -> None:
+    tidy = python(
+        """
+        import signal, sys, time
+        def stop(*_):
+            time.sleep(0.5)
+            print("put away", flush=True)
+            sys.exit(0)
+        signal.signal(signal.SIGTERM, stop)
+        print("working", flush=True)
+        time.sleep(600)
+        """
+    )
+    for limit in (3.0, 10.0, 40.0):  # the limit must outlast the child's start-up
+        with pytest.raises(CommandTimeoutError) as caught:
+            run_captured(tidy, {}, timeout=limit)
+        result = caught.value.result
+        assert result is not None
+        if result.stdout:
+            break
+    assert result.stdout == "working\nput away\n"
+
+
+@posix_only
+def test_a_child_of_the_command_that_ignores_being_asked_to_stop_is_killed_with_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Under `run_command` the command is not in a group of its own: only being found gets this child killed."""
+    monkeypatch.setattr(runner, "_TERMINATE_GRACE", 0.5)
+    deaf = (
+        "import os,signal,sys,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(600)"
+    )
+    family = python(
+        "import subprocess, sys\nsubprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]]).wait()",
+        deaf,
+        str(tmp_path / "deaf"),
+    )
+    try:
+        with pytest.raises(CommandTimeoutError):
+            run_command(family, {"TOKEN": SECRET}, timeout=3.0)
+        pid = int((tmp_path / "deaf").read_text())
+        deadline = time.monotonic() + PATIENCE
+        while time.monotonic() < deadline and _running(pid):
+            time.sleep(0.05)
+        assert not _running(pid)
+    finally:
+        try:
+            os.kill(int((tmp_path / "deaf").read_text()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+
+
+@posix_only
+def test_a_process_in_the_commands_group_whose_parent_is_gone_is_still_asked_before_it_is_killed(
+    tmp_path: Path,
+) -> None:
+    """Its parent exited, so it descends from nothing here; it is still in the group a captured command leads."""
+    orphan = (
+        "import os,signal,sys,time; "
+        "signal.signal(signal.SIGTERM, lambda *_: (open(sys.argv[1] + '/asked', 'w').write('asked'), sys.exit(0))); "
+        "open(sys.argv[1] + '/ready', 'w').write(str(os.getpid())); time.sleep(600)"
+    )
+    middle = "import subprocess,sys; subprocess.Popen([sys.executable, '-c', sys.argv[1], sys.argv[2]])"
+    family = python(
+        """
+        import subprocess, sys, time
+        subprocess.Popen([sys.executable, "-c", sys.argv[1], sys.argv[2], sys.argv[3]]).wait()
+        time.sleep(600)
+        """,
+        middle,
+        orphan,
+        str(tmp_path),
+    )
+    try:
+        with pytest.raises(CommandTimeoutError):
+            run_captured(family, {}, timeout=5.0)
+        assert (tmp_path / "ready").exists(), "the orphan was running when the command's time was up"
+        pid = int((tmp_path / "ready").read_text())
+        deadline = time.monotonic() + PATIENCE
+        while time.monotonic() < deadline and _running(pid):
+            time.sleep(0.05)
+        assert not _running(pid) and (tmp_path / "asked").read_text() == "asked"
+    finally:
+        try:
+            os.kill(int((tmp_path / "ready").read_text()), signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+
+
+def test_a_caller_that_can_cancel_is_asked_many_times_a_second_and_not_once() -> None:
+    asked: List[int] = []
+    result = run_captured(
+        python("import time; time.sleep(1.5)"), {}, timeout=PATIENCE, cancelled=lambda: bool(asked.append(1))
+    )
+    assert result.code == 0 and len(asked) >= 8
+
+
+@posix_only
+@pytest.mark.parametrize("foreground, expected", [("ours", True), ("another", False), ("unknown", False)])
+def test_the_terminal_is_asked_whose_turn_it_is_and_is_closed_again(
+    monkeypatch: pytest.MonkeyPatch, foreground: str, expected: bool
+) -> None:
+    opened: List[int] = []
+    real_open = os.open
+
+    def open_terminal(path: str, flags: int, *more: int) -> int:
+        if path != "/dev/tty":
+            return real_open(path, flags, *more)
+        opened.append(real_open(os.devnull, os.O_RDONLY))
+        return opened[-1]
+
+    def group_in_front(descriptor: int) -> int:
+        assert descriptor == opened[-1]
+        if foreground == "unknown":
+            raise OSError(25, "Inappropriate ioctl for device")
+        return os.getpgrp() + (0 if foreground == "ours" else 1)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", open_terminal)
+        patch.setattr(os, "tcgetpgrp", group_in_front)
+        answer = runner._keyboard_reaches_child()
+    assert answer is expected and len(opened) == 1
+    with pytest.raises(OSError):
+        os.fstat(opened[0])
+
+
+def test_an_interrupt_from_before_the_child_existed_is_passed_on_even_where_the_keyboard_reaches_the_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Child:
+        def __init__(self) -> None:
+            self.sent: List[int] = []
+
+        def send_signal(self, signum: int) -> None:
+            self.sent.append(signum)
+
+    monkeypatch.setattr(runner, "_keyboard_reaches_child", lambda: True)
+    relay = runner._Relay(cancel=False)  # never entered: its handler is called here as the system would call it
+    child = Child()
+    relay._handle(signal.SIGINT, None)
+    assert child.sent == []
+    relay.attach(child)  # type: ignore[arg-type]
+    assert child.sent == [signal.SIGINT], "the terminal sent that one when there was no child to receive it"
+    relay._handle(signal.SIGINT, None)
+    assert child.sent == [signal.SIGINT], "this one the terminal has given the child itself"
+    relay._handle(signal.SIGTERM, None)
+    assert child.sent == [signal.SIGINT, signal.SIGTERM]
+
+
+@posix_only
+def test_what_a_timeout_reports_names_the_command_and_holds_what_it_printed_to_the_last_byte() -> None:
+    start = SECRET[:6]
+    noisy = python(
+        """
+        import sys, time
+        sys.stdout.write("x" * 5000)
+        sys.stdout.flush()
+        sys.stderr.write("it ends with " + sys.argv[1])
+        sys.stderr.flush()
+        time.sleep(600)
+        """,
+        start,
+    )
+    for limit in (3.0, 10.0, 40.0):  # the limit must outlast the child's start-up
+        with pytest.raises(CommandTimeoutError) as caught:
+            run_captured(noisy, {"TOKEN": SECRET}, timeout=limit, max_bytes=100)
+        result = caught.value.result
+        assert result is not None
+        if result.stderr:
+            break
+    assert str(caught.value) == f"{noisy[0]} was still running after {limit:g} seconds and was stopped"
+    assert result.stdout == "x" * 100 and result.truncated, "one stream cut is a result that was cut"
+    assert result.stderr == "it ends with " + start, "what was held back in case a secret followed is output too"
+
+
+@posix_only
+def test_a_run_that_was_stopped_has_ended_its_threads_when_it_says_so() -> None:
+    """A command that is stopped at its limit, and a program it left behind that still holds its output:
+    the threads that carried the output wait for that program one moment, and the run reports after it."""
+    leaving = python(
+        """
+        import subprocess, sys, time
+        # A program whose parent has gone and that has a session of its own: nothing leads to it from the command.
+        holder = "import os, time; os.setsid(); print(os.getpid(), flush=True); time.sleep(75)"
+        start = "import subprocess, sys; subprocess.Popen([sys.executable, '-c', sys.argv[1]])"
+        subprocess.Popen([sys.executable, "-c", start, holder]).wait()
+        time.sleep(600)
+        """
+    )
+    threads = threading.active_count()
+    holders: List[int] = []
+    try:
+        for limit in (3.0, 10.0, 40.0):  # the limit must outlast the start of three programs
+            with pytest.raises(CommandTimeoutError) as caught:
+                run_captured(leaving, {}, timeout=limit)
+            still_carrying = threading.active_count() - threads
+            result = caught.value.result
+            assert result is not None
+            if result.stdout:
+                holders.append(int(result.stdout))
+                break
+        assert holders, "the program left behind never started"
+        assert still_carrying == 0
+        os.kill(holders[0], 0)  # still there, with the output it holds
+    finally:
+        for holder in holders:
+            os.kill(holder, signal.SIGKILL)
+
+
+def test_a_program_the_caller_named_is_refused_for_what_is_wrong_with_it(tmp_path: Path) -> None:
+    plain = tmp_path / "plain"
+    plain.write_text("#!/bin/sh\n")
+    plain.chmod(0o644)
+    for unusable in (5, b"/bin/sh", "/bin/sh\x00"):
+        with pytest.raises(UsageError, match="the program to start must be named by an absolute path"):
+            run_captured(["tool"], {}, executable=unusable)  # type: ignore[arg-type]
+    for present in (plain, tmp_path):
+        with pytest.raises(CommandNotExecutableError) as caught:
+            run_captured(["tool"], {}, executable=str(present))
+        assert str(caught.value) == f"{present} is not an executable file"
+    with pytest.raises(CommandNotFoundError) as missing:
+        run_captured(["tool"], {}, executable=str(tmp_path / "gone"))
+    assert str(missing.value) == f"command not found: {tmp_path / 'gone'}"
+
+
+def test_what_this_process_had_still_to_write_is_written_before_the_command_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flushed: List[str] = []
+
+    class Buffered:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def flush(self) -> None:
+            flushed.append(self.name)
+
+        def write(self, text: str) -> int:
+            return len(text)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "stdout", Buffered("stdout"))
+        patch.setattr(sys, "stderr", Buffered("stderr"))
+        status = run_command(python("pass"), {}, timeout=PATIENCE)
+    assert status == 0 and flushed[:2] == ["stdout", "stderr"]

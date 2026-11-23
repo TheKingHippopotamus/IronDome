@@ -342,6 +342,21 @@ machine; two things were the product's:
   Mac with zeroing off: the copy was left in 7 of 10 derivations before;
   after, in none of 20, and in none of 6 whole sessions ending in `lock`.
 
+### Found by changing the code one line at a time
+
+A tool changed the modules that hold keys, permissions and masking one line
+at a time and ran the tests against every change, to see which changes no
+test noticed. Nearly all of what got through was a test that was missing,
+and those tests are written now. One was a fault:
+
+- **A secret kept with white space around it was not masked when it was
+  printed without.** A token stored with a space or a line break at an end
+  (a field of an imported file, a pasted value) was masked only together
+  with that white space. `$(...)` drops the line breaks at the end of what
+  it captures and most programs trim what they read, so what they printed
+  went through. The value without the white space around it is now masked
+  too, in every encoding on the list, and `irondome scan` looks for it.
+
 ### Added
 
 - **Cryptography:** Argon2id (256 MiB, t=3, p=4 by default, 64 MiB on a
