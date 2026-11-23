@@ -225,7 +225,8 @@ def test_every_tool_comes_from_the_lockfile():
     everything = run_lines(code(CI)) + run_lines(code(RELEASE)) + shell_commands(CHECK)
     for command in everything:
         assert not re.search(r"(^|[\s;&|(])uvx\b|uv tool run", command), command
-    audits = [command for command in everything if "pip-audit" in command]
+    assert not [command for command in everything if "pip-audit" in command], "pip-audit is run by audit_lock.py"
+    audits = [command for command in everything if "scripts/audit_lock.py" in command]
     assert len(audits) == 2, audits  # ci.yml and scripts/check.sh
     zizmor = [command for command in everything if "zizmor" in command]
     assert len(zizmor) == 1, zizmor

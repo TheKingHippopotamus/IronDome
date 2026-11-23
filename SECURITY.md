@@ -132,13 +132,22 @@ Problems in `cryptography` or OpenSSL, the operating system, tpm2-tools or
 the Swift compiler belong to those projects; report them there. How IronDome
 uses them is in scope.
 
+IronDome installs on Python 3.9 and 3.10, which python.org no longer fixes
+(since October 2025 and October 2026). A fault in such an interpreter stays
+in it; `irondome doctor` warns on them. They are supported for as long as
+`cryptography` supports them, and no longer.
+
 ## How the project guards its own supply chain
 
 * One direct runtime dependency, `cryptography>=50.0.2`. The floor is the
   first release with no known advisory. `scripts/check.sh`, the gate run before
   every release, and the CI workflow, every week and on every change, run
-  `pip-audit` (itself installed from `uv.lock`) over everything
-  `uv.lock` pins: the runtime dependencies, the dev extra and the CI tools.
+  `pip-audit` (itself installed from `uv.lock`) over every version
+  `uv.lock` pins: the runtime dependencies, the dev extra and the CI tools,
+  including the versions pinned for another Python or another platform than
+  the one the audit runs on (`scripts/audit_lock.py`). An advisory that is
+  known and stays is named there with its reason, for one pinned version;
+  today that is one, in the test runner used on Python 3.9.
 * No dependency release is used until it has been public for seven days
   (`exclude-newer` in `pyproject.toml`, a cooldown in Dependabot).
 * No install-time code, no update check, no telemetry. IronDome itself makes

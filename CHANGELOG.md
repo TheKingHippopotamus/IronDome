@@ -357,6 +357,25 @@ and those tests are written now. One was a fault:
   went through. The value without the white space around it is now masked
   too, in every encoding on the list, and `irondome scan` looks for it.
 
+### Found by a review of everything the project installs
+
+Someone who was not the author went through every package, tool, image and
+workflow the project depends on, against the advisories of the day.
+
+- **The audit of dependencies looked at only part of the lockfile.**
+  `pip-audit` leaves out every pinned version whose marker does not hold for
+  the Python and the platform it runs on, so the versions pinned for
+  Python 3.9 and 3.10 were never checked, and four of them had known
+  advisories: a test runner, an upload tool and two packages it brings.
+  None of them is installed with IronDome. `scripts/audit_lock.py` now gives
+  `pip-audit` every pinned version; the upload tool and the CI tools are no
+  longer pinned for those Pythons at all; and the one advisory that stays
+  (the test runner on Python 3.9, where no fixed release runs) is named in
+  the script with its reason.
+- **`irondome doctor` warns on a Python that is no longer fixed.** IronDome
+  installs on Python 3.9 and 3.10, and python.org has stopped fixing both.
+  `doctor` says so, and so do the README and SECURITY.md.
+
 ### Added
 
 - **Cryptography:** Argon2id (256 MiB, t=3, p=4 by default, 64 MiB on a

@@ -54,6 +54,8 @@ $ pipx install IronDome        # or: uv tool install IronDome / pip install Iron
 ```
 
 Python 3.9.2 or newer, tested on 3.9 through 3.14. macOS on Apple silicon, and Linux.
+Python 3.9 and 3.10 no longer get security fixes from python.org: IronDome runs on
+them and `irondome doctor` says so, and a newer Python is the better place for it.
 Intel Macs are untested: `cryptography` publishes no macOS wheel for them, so installing
 there builds it from source, which needs Rust and OpenSSL. On a Mac, Touch ID
 and Secure Enclave support compiles a Swift helper of about 250 lines on first use (needs the

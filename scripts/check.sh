@@ -357,12 +357,13 @@ uv run --no-sync mypy --cache-dir "$work/mypy-cache" src
 step "the claims document matches the registry"
 uv run --no-sync python scripts/claims.py --check
 
-# The same scope and the same tool as ci.yml: everything uv.lock pins (runtime,
-# the dev extra and the ci group), audited by the pip-audit uv.lock pins.
+# The same scope and the same tool as ci.yml: every version uv.lock pins (runtime,
+# the dev extra and the ci group), for every Python and platform, audited by the
+# pip-audit uv.lock pins. scripts/audit_lock.py says why pip-audit is not run directly.
 step "no known vulnerability in any locked dependency"
 uv export --quiet --locked --all-extras --all-groups --no-emit-project --format requirements-txt -o "$work/requirements.txt"
 UV_PROJECT_ENVIRONMENT="$work/venv-ci" uv run --quiet --locked --only-group ci --python 3.14 \
-    pip-audit --disable-pip --require-hashes -r "$work/requirements.txt"
+    python scripts/audit_lock.py "$work/requirements.txt"
 
 step "build the distributions, with the build backend pinned by hash, and check them"
 build "$work/dist"

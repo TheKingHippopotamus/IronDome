@@ -520,3 +520,29 @@ def test_a_cached_helper_that_is_not_the_one_compiled_is_a_warning(
     assert not findings(report, "ok", "secure-enclave-helper")
     (enclave,) = [item for item in report["backends"] if item["name"] == "macos-se"]
     assert enclave["probed"] is False and "damaged" in enclave["detail"]
+
+
+# --- The interpreter ---
+
+
+def test_a_python_that_is_no_longer_fixed_is_a_warning_and_never_a_problem(
+    report_of: Callable[[], Dict[str, Any]], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """IronDome installs on Python 3.9 and 3.10; python.org fixes neither. doctor says so and still passes."""
+    running = (sys.version_info[0], sys.version_info[1])
+    assert doctor._PYTHON_ENDED == {(3, 9): "October 2025", (3, 10): "October 2026"}
+    assert len(findings(report_of(), "warning", "python")) == (1 if running in doctor._PYTHON_ENDED else 0)
+
+    monkeypatch.setattr(doctor, "_PYTHON_ENDED", {running: "a month ago"})
+    report = report_of()
+    (warning,) = findings(report, "warning", "python")
+    assert warning["message"] == (
+        f"Python {running[0]}.{running[1]} has had no security fixes since a month ago: IronDome runs on it, "
+        "and a fault in the interpreter itself stays"
+    )
+    remedy = "install IronDome on a newer Python, for example: uv tool install --python 3.13 IronDome"
+    assert warning["remedy"] == remedy
+    assert not findings(report, "problem", "python")
+
+    monkeypatch.setattr(doctor, "_PYTHON_ENDED", {(running[0], running[1] + 1): "never", (running[0] + 1, 0): "never"})
+    assert findings(report_of(), "warning", "python") == []

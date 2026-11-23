@@ -14,8 +14,9 @@ a one-line remedy:
 ``warning``  weaker than it should be, or something to fix soon
 ``problem``  broken, or exposed: fix it before relying on the vault
 
-What it reports: the IronDome, Python, cryptography and OpenSSL versions;
-the platform; each device backend's probe and the one a new vault would use;
+What it reports: the IronDome, Python, cryptography and OpenSSL versions,
+and whether that Python still gets security fixes; the platform; each
+device backend's probe and the one a new vault would use;
 the current bunker's vault, its generation and keyslots and whether their
 device keys are on this machine; file and directory modes under the vault
 and device directories; whether memory locking works and core dumps are off;
@@ -62,6 +63,8 @@ _SOFTWARE = "software"
 #: A tree with more entries than this is not walked any further.
 _MAX_WALK = 10000
 _PR_GET_DUMPABLE = 3
+#: The Python versions IronDome still installs on that python.org has stopped fixing, and since when.
+_PYTHON_ENDED = {(3, 9): "October 2025", (3, 10): "October 2026"}
 
 
 class _Findings:
@@ -597,6 +600,14 @@ def collect() -> Dict[str, Any]:
     findings = _Findings()
     report: Dict[str, Any] = dict(versions())
     report["platform"] = _platform()
+    ended = _PYTHON_ENDED.get((sys.version_info[0], sys.version_info[1]))
+    if ended is not None:
+        findings.add(
+            "warning", "python",
+            f"Python {sys.version_info[0]}.{sys.version_info[1]} has had no security fixes since {ended}: IronDome "
+            "runs on it, and a fault in the interpreter itself stays",
+            "install IronDome on a newer Python, for example: uv tool install --python 3.13 IronDome",
+        )
     helper = _guarded("secure-enclave-helper", findings, lambda: _helper(findings))
     backends = [_probe(name, helper) for name in devices.backend_names()]
     report["backends"] = backends
