@@ -1592,6 +1592,7 @@ def test_the_systems_command_is_looked_up_on_fixed_paths_and_only_where_one_exis
         return name if os.path.isabs(name) else f"/usr/bin/{name}"
 
     monkeypatch.setattr(migrate_v3.shutil, "which", which)
+    monkeypatch.setattr(migrate_v3.paths, "program_fault", lambda path: None)  # this test is about where it looks
     monkeypatch.setattr(migrate_v3, "_PLATFORM", "darwin")
     assert REAL_KEYCHAIN_TOOL() == "/usr/bin/security"
     monkeypatch.setattr(migrate_v3, "_PLATFORM", "linux")
@@ -1607,6 +1608,30 @@ def test_the_systems_command_is_looked_up_on_fixed_paths_and_only_where_one_exis
 def test_on_this_mac_the_keychain_command_is_where_the_module_runs_it_from() -> None:
     """Only looked at, never run (the autouse guard would fail the test); a sandbox may forbid running it."""
     assert migrate_v3._MACOS_TOOL == "/usr/bin/security" and os.path.isfile(migrate_v3._MACOS_TOOL)
+
+
+@posix_only
+@pytest.mark.parametrize("mode", [0o775, 0o757], ids=["group", "others"])
+def test_a_keychain_command_that_others_can_write_is_not_run_and_the_reason_is_said(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: int
+) -> None:
+    """It would be handed the key of the 3.x vault. Nothing is run: the autouse guard refuses every command."""
+    command = tmp_path / "secret-tool"
+    command.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    command.chmod(mode)
+    monkeypatch.setattr(migrate_v3, "_PLATFORM", "linux")
+    monkeypatch.setattr(migrate_v3, "_TOOL_PATH", str(tmp_path))
+    monkeypatch.setattr(migrate_v3, "_keychain_is_ours", lambda: True)
+    assert REAL_KEYCHAIN_TOOL() is None
+    reason = f"{command} can be written by other users"
+    assert migrate_v3._no_tool().startswith(reason)
+    monkeypatch.setattr(migrate_v3, "_keychain_tool", REAL_KEYCHAIN_TOOL)
+    assert migrate_v3.keychain_master_key() is None
+    assert str(migrate_v3.keychain_unreachable()).startswith(reason)
+    assert str(migrate_v3._keychain_forget("anyone")).startswith(f"could not be examined: {reason}")
+    command.chmod(0o755)
+    assert REAL_KEYCHAIN_TOOL() == str(command)
+    assert migrate_v3.keychain_unreachable() is None
 
 
 @posix_only

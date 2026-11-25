@@ -79,6 +79,7 @@ __all__ = [
     "lock_file",
     "helper_dir",
     "legacy_v3_dir",
+    "program_fault",
     "ensure_dir",
     "write_atomic",
     "read_file",
@@ -274,6 +275,37 @@ def legacy_v3_dir() -> Path:
     if override:
         return _expand(override)
     return _expand("~/.password_manager")
+
+
+def program_fault(path: Union[str, Path]) -> Optional[str]:
+    """Why the program at *path* is not one to hand a secret to; None when it may be run.
+
+    A system tool that is given a secret (a clipboard tool, the keychain
+    command) is run only when nobody but root or this user could have put it
+    there: it is a regular file (a link is followed to what it names), it
+    belongs to root or to this user, and neither its group nor anyone else
+    can write it. The fixed list of directories a tool is taken from says
+    where it may be; this says who could have changed it. It looks at the
+    file alone, not at the directories above it, and it is no defence against
+    a program already running as this user, which can read what the tool is
+    given anyway.
+
+    Windows has no owner and mode of this kind: the tools are taken from the
+    system directory Windows itself names, and nothing is refused here.
+    """
+    if not hasattr(os, "getuid"):
+        return None
+    try:
+        info = os.stat(path)
+    except OSError as exc:
+        return f"{path} cannot be examined ({exc.strerror or exc})"
+    if not stat.S_ISREG(info.st_mode):
+        return f"{path} is not a regular file"
+    if info.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return f"{path} can be written by other users"
+    if info.st_uid not in (0, os.getuid()):
+        return f"{path} belongs to another user"
+    return None
 
 
 def _is_own(path: Path) -> bool:

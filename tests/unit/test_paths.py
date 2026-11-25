@@ -1265,3 +1265,75 @@ def test_a_directory_made_without_ensure_dir_is_reported_as_not_marked(tmp_path:
 @pytest.mark.skipif(sys.platform == "darwin", reason="everywhere but macOS")
 def test_off_macos_there_is_no_backup_mark(tmp_path: Path) -> None:
     assert paths.exclude_from_backup(tmp_path) is None and paths.excluded_from_backup(tmp_path) is None
+
+
+# ---------------------------------------------------------------------------
+# program_fault: is this a program to hand a secret to
+# ---------------------------------------------------------------------------
+
+
+def _program(directory: Path, mode: int) -> Path:
+    program = directory / "tool"
+    program.write_text("#!/bin/sh\n", encoding="utf-8")
+    program.chmod(mode)
+    return program
+
+
+@posix_only
+@pytest.mark.parametrize("mode", [0o755, 0o700, 0o555, 0o711], ids=oct)
+def test_a_program_only_its_owner_can_write_is_one_to_run(tmp_path: Path, mode: int) -> None:
+    program = _program(tmp_path, mode)
+    assert paths.program_fault(program) is None
+    assert paths.program_fault(str(program)) is None
+
+
+@posix_only
+@pytest.mark.parametrize("mode", [0o775, 0o757, 0o777, 0o720, 0o702], ids=oct)
+def test_a_program_its_group_or_anyone_else_can_write_is_not(tmp_path: Path, mode: int) -> None:
+    program = _program(tmp_path, mode)
+    assert paths.program_fault(program) == f"{program} can be written by other users"
+
+
+@posix_only
+def test_a_program_of_another_user_is_not_one_to_run_and_one_of_root_is(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    program = _program(tmp_path, 0o755)
+    owner = program.stat().st_uid
+    monkeypatch.setattr(os, "getuid", lambda: owner + 1)
+    if owner == 0:
+        assert paths.program_fault(program) is None  # root's program is anybody's to run
+    else:
+        assert paths.program_fault(program) == f"{program} belongs to another user"
+    monkeypatch.setattr(os, "getuid", lambda: owner)
+    assert paths.program_fault(program) is None
+    # /bin/sh is root's on every system the suite runs on, and the suite does not run as root.
+    assert os.stat("/bin/sh").st_uid == 0 and paths.program_fault("/bin/sh") is None
+
+
+@posix_only
+def test_a_link_is_judged_by_the_program_it_names(tmp_path: Path) -> None:
+    good, bad = tmp_path / "good", tmp_path / "bad"
+    good.mkdir()
+    bad.mkdir()
+    (tmp_path / "to-good").symlink_to(_program(good, 0o755))
+    (tmp_path / "to-bad").symlink_to(_program(bad, 0o777))
+    assert paths.program_fault(tmp_path / "to-good") is None
+    assert paths.program_fault(tmp_path / "to-bad") == f"{tmp_path / 'to-bad'} can be written by other users"
+
+
+@posix_only
+def test_what_is_not_a_file_or_is_not_there_is_not_a_program_to_run(tmp_path: Path) -> None:
+    assert paths.program_fault(tmp_path) == f"{tmp_path} is not a regular file"
+    missing = tmp_path / "missing"
+    assert paths.program_fault(missing) == f"{missing} cannot be examined (No such file or directory)"
+    (tmp_path / "dangling").symlink_to(missing)
+    assert "cannot be examined" in str(paths.program_fault(tmp_path / "dangling"))
+
+
+def test_where_there_are_no_owners_and_modes_nothing_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Windows: the tools come from the system directory Windows names, and that is the whole check."""
+    monkeypatch.delattr(os, "getuid", raising=False)
+    assert paths.program_fault(tmp_path / "missing") is None

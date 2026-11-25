@@ -50,10 +50,11 @@ import time
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
+from irondome import paths
 from irondome.errors import IronDomeError, UsageError
 from irondome.secmem import wipe_bytes
 
-__all__ = ["MIN_CLEAR_SECONDS", "MAX_CLEAR_SECONDS", "tools", "copy", "main"]
+__all__ = ["MIN_CLEAR_SECONDS", "MAX_CLEAR_SECONDS", "ToolRefused", "tools", "copy", "main"]
 
 #: Bounds for the delay before the clipboard is cleared.
 MIN_CLEAR_SECONDS = 1
@@ -197,25 +198,43 @@ def _install_advice() -> str:
     )
 
 
+class ToolRefused(UsageError):
+    """A clipboard tool is installed, and it is one that somebody else could have replaced."""
+
+
 def tools() -> Tuple[str, str, str]:
     """The tool :func:`copy` would use here: ``(name, writer, reader)``, the last two absolute paths.
 
     Runs nothing and copies nothing. Raises :class:`UsageError`, with advice on what to install,
-    where there is no usable tool.
+    where there is no usable tool, and :class:`ToolRefused` where the tool that was found is not
+    one to hand a secret to.
     """
     tool, writer, reader = _find_tool()
     return tool.name, writer, reader
 
 
 def _find_tool() -> Tuple[_Tool, str, str]:
-    """The first usable tool and the absolute paths of its writer and reader."""
+    """The first installed tool and the absolute paths of its writer and reader.
+
+    The tool that is found is the one that is used or refused: a tool that somebody else could
+    have replaced is not passed over for the next one, because whoever replaced it is then
+    someone to hear about.
+    """
     search = _search_path()
     for name in _candidates():
         tool = _TOOLS[name]
         writer = shutil.which(tool.writer, path=search)
         reader = shutil.which(tool.reader, path=search)
         if writer and reader:
-            return tool, os.path.abspath(writer), os.path.abspath(reader)
+            writer, reader = os.path.abspath(writer), os.path.abspath(reader)
+            for program in (writer, reader):
+                fault = paths.program_fault(program)
+                if fault:
+                    raise ToolRefused(
+                        f"cannot copy to the clipboard: {fault}, and a secret is given only to a tool "
+                        "that nobody but root or you can change"
+                    )
+            return tool, writer, reader
     raise UsageError(f"cannot copy to the clipboard: {_install_advice()}")
 
 
@@ -436,7 +455,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ):
         return 2
     for path in (args.reader, args.writer):
-        if not os.path.isabs(path) or not os.path.isfile(path):
+        if not os.path.isabs(path) or not os.path.isfile(path) or paths.program_fault(path):
             return 2
     tool = _TOOLS[args.tool]
     time.sleep(args.clear_after)

@@ -501,6 +501,13 @@ def _clipboard(findings: _Findings) -> Dict[str, Any]:
 
     try:
         _tool, writer, reader = clipboard.tools()  # runs nothing and copies nothing
+    except clipboard.ToolRefused as exc:
+        findings.add(
+            "warning", "clipboard", f"--copy is refused here: {exc}",
+            "find out who changed that file; a tool installed by the system belongs to root "
+            "and only root can write it",
+        )
+        return {"tool": None, "reader": None}
     except UsageError as exc:
         findings.add(
             "note", "clipboard", f"--copy cannot work here: {exc}",

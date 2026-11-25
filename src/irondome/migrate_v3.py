@@ -900,8 +900,19 @@ def _keychain_tool() -> Optional[str]:
 
     ``/usr/bin/security`` on macOS, at that fixed path; ``secret-tool`` on
     Linux, from ``/usr/bin`` or ``/bin``. ``$PATH`` is never searched, so a
-    program of the same name planted earlier in it is never run.
+    program of the same name planted earlier in it is never run, and a command
+    that somebody other than root or this user could have replaced is not run
+    either (:func:`irondome.paths.program_fault`): it would be handed the key
+    of the 3.x vault.
     """
+    found = _keychain_tool_installed()
+    if found is None or paths.program_fault(found) is not None:
+        return None
+    return found
+
+
+def _keychain_tool_installed() -> Optional[str]:
+    """Where the keychain command is, whether or not it is one to run."""
     if _PLATFORM == "darwin":
         return shutil.which(_MACOS_TOOL)  # a path with a directory: checked as it is, never searched for
     if _PLATFORM.startswith("linux"):
@@ -911,6 +922,10 @@ def _keychain_tool() -> Optional[str]:
 
 def _no_tool() -> str:
     """Why there is no keychain command to run here, in words a person can act on."""
+    found = _keychain_tool_installed()
+    fault = paths.program_fault(found) if found is not None else None
+    if fault:
+        return f"{fault}, and IronDome runs the keychain command only where nobody but root or you can change it"
     if _PLATFORM == "darwin":
         return f"{_MACOS_TOOL}, the macOS keychain command, cannot be run here"
     if _PLATFORM.startswith("linux"):

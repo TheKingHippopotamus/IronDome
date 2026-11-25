@@ -375,6 +375,19 @@ workflow the project depends on, against the advisories of the day.
 - **`irondome doctor` warns on a Python that is no longer fixed.** IronDome
   installs on Python 3.9 and 3.10, and python.org has stopped fixing both.
   `doctor` says so, and so do the README and SECURITY.md.
+- **A clipboard tool or keychain command that somebody else could have
+  replaced is no longer run.** The TPM tools were already run only when
+  they belong to root or to you and nobody else can write them. `--copy`
+  gave a secret to the clipboard tool, and `migrate` read the key of a 3.x
+  vault through the keychain command, on the strength of the directory
+  alone. Both now make the same check of the file (`paths.program_fault`),
+  the helper that clears the clipboard makes it again before it runs
+  anything, and `irondome doctor` warns and names the file. Whoever could
+  have used this was already able to write to a system directory, so this
+  is a second lock, not a hole that was open.
+- **The Linux test image no longer installs `pip`.** Nothing in it used it:
+  `uv` makes the environments. One program fewer in the image the tests
+  run in.
 
 ### Added
 

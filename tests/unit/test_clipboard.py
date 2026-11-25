@@ -223,6 +223,68 @@ def test_tools_names_what_copy_would_use_and_runs_nothing(tools: FakeTools, monk
         clipboard.tools()
 
 
+posix_only = pytest.mark.skipif(not hasattr(os, "getuid"), reason="owners and modes")
+
+
+@posix_only
+@pytest.mark.parametrize("which", ["pbcopy", "pbpaste"])
+@pytest.mark.parametrize("mode", [0o720, 0o702], ids=["group", "others"])
+def test_a_tool_that_others_can_write_is_given_nothing(
+    tools: FakeTools, spawned: List[Any], which: str, mode: int
+) -> None:
+    """The writer would be handed the secret, the reader is run by the helper that clears it: both are checked."""
+    (tools.bin / which).chmod(mode)
+    with pytest.raises(clipboard.ToolRefused, match="can be written by other users") as refused:
+        clipboard.copy(SECRET, 30)
+    assert str(tools.bin / which) in str(refused.value) and SECRET not in str(refused.value)
+    assert isinstance(refused.value, UsageError)
+    with pytest.raises(clipboard.ToolRefused):
+        clipboard.tools()
+    assert tools.log() == [] and spawned == []
+    assert tools.clipboard() == b"before"
+    (tools.bin / which).chmod(0o700)
+    assert clipboard.copy(SECRET, 30) == "pbcopy"
+
+
+@posix_only
+def test_a_tool_that_is_refused_is_not_passed_over_for_the_next_one(
+    tools: FakeTools, spawned: List[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _platform(monkeypatch, "linux", {"DISPLAY": ":0"})
+    (tools.bin / "xclip").chmod(0o777)
+    with pytest.raises(clipboard.ToolRefused, match="xclip can be written by other users"):
+        clipboard.copy(SECRET, 30)
+    assert tools.log() == [] and spawned == []
+
+
+@posix_only
+def test_a_tool_of_another_user_is_given_nothing(
+    tools: FakeTools, spawned: List[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    owner = (tools.bin / "pbcopy").stat().st_uid
+    if owner == 0:
+        pytest.skip("root's tools are anybody's to run")
+    monkeypatch.setattr(os, "getuid", lambda: owner + 1)
+    with pytest.raises(clipboard.ToolRefused, match="belongs to another user"):
+        clipboard.copy(SECRET, 30)
+    assert tools.log() == [] and spawned == []
+
+
+@posix_only
+@pytest.mark.parametrize("which", ["pbcopy", "pbpaste"])
+def test_the_helper_runs_no_tool_that_others_can_write(tools: FakeTools, salt: bytes, which: str) -> None:
+    """Between the copy and the clearing a tool may have been replaced; the helper looks again."""
+    tools.set_clipboard(SECRET.encode("utf-8"))
+    digest = hashlib.sha256(salt + SECRET.encode("utf-8")).hexdigest()
+    (tools.bin / which).chmod(0o722)
+    assert clipboard.main(_helper_arguments(tools, digest)) == 2
+    assert tools.log() == []
+    assert tools.clipboard() == SECRET.encode("utf-8")
+    (tools.bin / which).chmod(0o700)
+    assert clipboard.main(_helper_arguments(tools, digest)) == 0
+    assert tools.clipboard() == b""
+
+
 def test_xsel_is_used_where_there_is_no_xclip(
     tools: FakeTools, spawned: List[Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:

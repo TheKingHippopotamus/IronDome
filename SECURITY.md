@@ -130,7 +130,10 @@ behaviour, not vulnerabilities. The main ones:
 
 Problems in `cryptography` or OpenSSL, the operating system, tpm2-tools or
 the Swift compiler belong to those projects; report them there. How IronDome
-uses them is in scope.
+uses them is in scope. The same holds for the security chip itself: the
+firmware of a TPM is the computer maker's to update, and IronDome uses a TPM
+only to store a secret in its NV memory and to count wrong guesses, not for
+attestation and not for RSA.
 
 IronDome installs on Python 3.9 and 3.10, which python.org no longer fixes
 (since October 2025 and October 2026). A fault in such an interpreter stays
@@ -156,10 +159,19 @@ in it; `irondome doctor` warns on them. They are supported for as long as
   helper, compiled on your Mac from the Swift source shipped with it.
   `cryptography` brings its own OpenSSL, and on Linux the TPM backend runs the
   system's tpm2-tools.
+* A system program that IronDome hands a secret to, or that stands between
+  it and the TPM (tpm2-tools, the clipboard tool, the keychain command read
+  by `migrate`), is taken from a fixed list of system directories, never from
+  `$PATH`, and on macOS and Linux is run only if it belongs to root or to
+  you and nobody else can write it.
 * Development, CI and the tests that gate a release run in the hash-locked
   environment from `uv.lock`. `uv.lock` does not cover build dependencies,
   so the build backend (`setuptools`) is pinned by hash in `scripts/check.sh`,
-  the one build recipe CI, the release and a local build share.
+  the one build recipe CI, the release and a local build share. That pin is
+  ours alone: whoever builds from the source distribution gets the
+  `setuptools` their own installer chooses (`pyproject.toml` can name a
+  minimum, not a hash). The wheel is what the gate built and tested; install
+  that.
 * Workflow actions are pinned to commit hashes, and CI checks the workflows
   with zizmor. A release tag must be on main; the release workflow runs the
   whole CI on it, then builds in a job that runs nothing but that recipe and a

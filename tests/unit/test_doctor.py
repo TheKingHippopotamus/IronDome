@@ -363,6 +363,23 @@ def test_no_clipboard_tool_is_a_note(monkeypatch: pytest.MonkeyPatch, report_of:
     assert "no clipboard tool was found" in note["message"]
 
 
+def test_a_clipboard_tool_that_is_refused_is_a_warning_that_names_it(
+    monkeypatch: pytest.MonkeyPatch, report_of: Callable[[], Dict[str, Any]]
+) -> None:
+    from irondome import clipboard
+
+    def refused() -> Any:
+        raise clipboard.ToolRefused("cannot copy to the clipboard: /usr/local/bin/xclip can be written by other users")
+
+    monkeypatch.setattr(clipboard, "tools", refused)
+    report = report_of()
+    assert report["clipboard"] == {"tool": None, "reader": None}
+    (warning,) = findings(report, "warning", "clipboard")
+    assert "/usr/local/bin/xclip can be written by other users" in warning["message"]
+    assert "install a clipboard tool" not in str(warning.get("remedy"))
+    assert findings(report, "note", "clipboard") == []
+
+
 def test_clipboard_reports_the_tools_copy_would_use(
     monkeypatch: pytest.MonkeyPatch, report_of: Callable[[], Dict[str, Any]]
 ) -> None:
