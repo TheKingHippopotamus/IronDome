@@ -31,7 +31,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 import pytest
 
-from irondome import audit, caps, device, keys, otp, paths
+from irondome import __version__, audit, caps, device, keys, otp, paths
 from irondome.device.base import DEVICE_SECRET_LEN, POLICY_BIOMETRY, POLICY_DEVICE, new_ref
 from irondome.device.software import SoftwareBackend
 from irondome.errors import AuthError
@@ -482,7 +482,7 @@ def test_an_older_client_shakes_hands_first(world: World, servers: Servers) -> N
     hello = {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "old", "version": "1"}}
     answer = server.request("initialize", hello, modern=False)["result"]
     assert answer["protocolVersion"] == "2025-06-18"
-    assert answer["serverInfo"] == {"name": "irondome", "version": "4.0.0"}
+    assert answer["serverInfo"] == {"name": "irondome", "version": __version__}
     server.send({"jsonrpc": "2.0", "method": "notifications/initialized"})
     assert [entry["name"] for entry in server.request("tools/list", modern=False)["result"]["tools"]] == TOOL_NAMES
     assert server.request("ping", modern=False)["result"] == {}

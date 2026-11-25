@@ -3,7 +3,7 @@
 Thank you for looking. Bug reports, tests, documentation fixes and code are
 all welcome, and a small pull request that does one thing is the easiest kind
 to review. Questions and bugs go to the
-[issue tracker](https://github.com/Nir-Ghub/IronDome/issues).
+[issue tracker](https://github.com/TheKingHippopotamus/IronDome/issues).
 Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
 
 IronDome is a security tool, so the bar for a change is simple to state: it
@@ -21,7 +21,7 @@ You need [uv](https://docs.astral.sh/uv/) 0.13.4 or newer (`uv --version`).
 Python 3.9.2 or newer from your machine, or downloads one.
 
 ```console
-$ git clone https://github.com/Nir-Ghub/IronDome.git
+$ git clone https://github.com/TheKingHippopotamus/IronDome.git
 $ cd IronDome
 $ uv sync --locked --extra dev
 ```
@@ -63,7 +63,11 @@ Tests that need hardware are marked:
 * `interactive` needs a person at the sensor and runs only with
   `IRONDOME_TEST_INTERACTIVE=1`.
 
-To run the release gates on your own machine, as CI does:
+GitHub Actions is not running for this repository at present, so a pull
+request gets no automatic checks. Run the gates below before you open one and
+say in it what you ran; the maintainer runs the complete gate before merging.
+
+To run the release gates on your own machine, as the CI workflow does:
 
 ```console
 $ scripts/check.sh            # lockfile, the suite on Python 3.9 and 3.14, lint, claims,
@@ -105,7 +109,7 @@ A claim that says more than its tests show is a bug.
 
 ## Rules for code
 
-* **Python 3.9.2 or newer.** CI runs the suite on Python 3.9 through 3.14,
+* **Python 3.9.2 or newer.** The suite is run on Python 3.9 through 3.14,
   on Linux and macOS, so a feature newer than 3.9, such as `match` or an
   `X | Y` union evaluated at run time, fails there.
 * **One direct runtime dependency.** The standard library and `cryptography`, nothing

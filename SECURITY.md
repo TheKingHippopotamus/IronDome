@@ -16,7 +16,7 @@ discussion.
 
 Report it privately through GitHub's private vulnerability reporting for this
 repository:
-<https://github.com/Nir-Ghub/IronDome/security/advisories/new>
+<https://github.com/TheKingHippopotamus/IronDome/security/advisories/new>
 
 Only you and the repository's maintainers can see the report until an
 advisory is published. If that page shows no report form, private reporting
@@ -142,6 +142,12 @@ in it; `irondome doctor` warns on them. They are supported for as long as
 
 ## How the project guards its own supply chain
 
+GitHub Actions is not running for this repository at present. The workflows
+in `.github/workflows` say what the CI and the release do when it is. Until
+then the same gate, `scripts/check.sh --linux`, is run by hand before
+anything is pushed, on a Mac and in a Linux container, and the audit of
+dependencies is one of its steps.
+
 * One direct runtime dependency, `cryptography>=50.0.2`. The floor is the
   first release with no known advisory. `scripts/check.sh`, the gate run before
   every release, and the CI workflow, every week and on every change, run
@@ -179,23 +185,26 @@ in it; `irondome doctor` warns on them. They are supported for as long as
   verbatim GPL-3.0 LICENSE), and uploads through PyPI Trusted Publishing,
   with no upload token.
 
-### How 4.0.0 itself was released
+### How 4.0.0 will be released
 
-Not through the release workflow. The repository moved to its present home on
-the day 4.0.0 was released, and the release workflow had never run there; a
-first release was not the place to try it. What was done in its place, on the
-maintainer's Mac:
+4.0.0 is not released yet. This repository holds release candidate 1
+(`4.0.0rc1`), and PyPI still serves 3.2.2.
 
-* The complete gate, `scripts/check.sh --linux`, ran to its last line on the
+If GitHub Actions is running for this repository by then, the release goes
+through the release workflow described above, and PyPI attaches a provenance
+attestation to each file. If it is not, the release is made by hand on the
+maintainer's Mac, and this section will say so:
+
+* The complete gate, `scripts/check.sh --linux`, runs to its last line on the
   release commit: the whole suite on macOS on Python 3.9 and 3.14 with the
   Secure Enclave, lint, types, the claims document, `pip-audit`, the build and
   a clean install of the wheel, then the whole suite in a Linux container
   with a software TPM on Python 3.9 and 3.13.
-* The two files were built with the release workflow's own recipe,
+* The two files are built with the release workflow's own recipe,
   `scripts/check.sh --build dist --release 4.0.0`, from the commit the tag
-  `v4.0.0` names, and uploaded by hand with a PyPI token scoped to this
-  project. PyPI therefore holds no provenance attestation for them.
-* Their SHA-256 hashes are in the message of the tag `v4.0.0`
+  `v4.0.0` names, and uploaded with a PyPI token scoped to this project. PyPI
+  then holds no provenance attestation for them.
+* Their SHA-256 hashes go into the message of the tag `v4.0.0`
   (`git show v4.0.0`), to compare with what PyPI serves.
 
 The build is not byte-for-byte reproducible: two builds of one commit differ
@@ -203,7 +212,6 @@ in the timestamps inside the archives and in nothing else. To check a file
 from PyPI against the source, build the tag with that recipe and compare the
 two archives member by member.
 
-A later release goes through the release workflow; until one has, each
-release says here how it was made.
+Each release says here how it was made.
 
 IronDome has not been audited by an independent party.

@@ -75,13 +75,14 @@ ci = ["pip-audit>=2.10.1", "zizmor>=1.0"]
 irondome = "irondome.cli.main:main"
 
 [project.urls]
-# The repository is Nir-Ghub/IronDome on GitHub. Labels follow PEP 753.
+# The repository is TheKingHippopotamus/IronDome on GitHub (the name of a
+# local folder is not the repository's name). Labels follow PEP 753.
 Homepage = "https://iron-dome-bunker.vercel.app"
-Documentation = "https://github.com/Nir-Ghub/IronDome/tree/main/docs"
-Source = "https://github.com/Nir-Ghub/IronDome"
-Issues = "https://github.com/Nir-Ghub/IronDome/issues"
-Changelog = "https://github.com/Nir-Ghub/IronDome/blob/main/CHANGELOG.md"
-Security = "https://github.com/Nir-Ghub/IronDome/blob/main/SECURITY.md"
+Documentation = "https://github.com/TheKingHippopotamus/IronDome/tree/main/docs"
+Source = "https://github.com/TheKingHippopotamus/IronDome"
+Issues = "https://github.com/TheKingHippopotamus/IronDome/issues"
+Changelog = "https://github.com/TheKingHippopotamus/IronDome/blob/main/CHANGELOG.md"
+Security = "https://github.com/TheKingHippopotamus/IronDome/blob/main/SECURITY.md"
 
 [tool.setuptools.dynamic]
 version = { attr = "irondome.__version__" }

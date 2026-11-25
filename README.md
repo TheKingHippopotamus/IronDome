@@ -10,14 +10,17 @@ A local vault for passwords, API keys and one-time codes, bound to your Mac's
 Secure Enclave or a TPM 2.0 on Linux. No cloud, no account, no network code, one
 direct dependency.
 
-[![PyPI](https://img.shields.io/pypi/v/IronDome?color=9bae4a&label=pypi)](https://pypi.org/project/IronDome/)
-[![Python](https://img.shields.io/pypi/pyversions/IronDome?color=9bae4a)](https://pypi.org/project/IronDome/)
+[![Version](https://img.shields.io/badge/version-4.0.0rc1%2C%20not%20released%20yet-9bae4a)](CHANGELOG.md)
+[![Python](https://img.shields.io/badge/python-3.9%20to%203.14-9bae4a)](#install)
 [![License](https://img.shields.io/badge/license-GPL--3.0--only-9bae4a)](LICENSE)
 [![Claims](https://img.shields.io/badge/claims-each%20with%20its%20tests-9bae4a)](docs/CLAIMS.md)
 
 [Website](https://iron-dome-bunker.vercel.app) · [Threat model](docs/THREAT_MODEL.md) · [Architecture](docs/ARCHITECTURE.md) · [Every claim and its test](docs/CLAIMS.md)
 
 </div>
+
+> **Version 4 is not released yet.** This repository holds release candidate 1,
+> in its last checks before release. [Install](#install) says how to try it.
 
 ```console
 $ irondome add github --kind secret --alias GITHUB_TOKEN    # paste the token at the hidden prompt
@@ -49,9 +52,18 @@ audit log.
 
 ## Install
 
+Version 4 is not released yet: this repository holds release candidate 1, in
+its last checks. `pipx install IronDome` still installs 3.2.2 from PyPI, an
+older and different program. Until 4.0.0 is there, version 4 installs from
+this repository:
+
 ```console
-$ pipx install IronDome        # or: uv tool install IronDome / pip install IronDome
+$ pipx install git+https://github.com/TheKingHippopotamus/IronDome.git
 ```
+
+That builds it on your machine, with the build tool your installer picks.
+Once 4.0.0 is on PyPI the command is `pipx install IronDome` (or
+`uv tool install IronDome`, or `pip install IronDome`).
 
 Python 3.9.2 or newer, tested on 3.9 through 3.14. macOS on Apple silicon, and Linux.
 Python 3.9 and 3.10 no longer get security fixes from python.org: IronDome runs on
@@ -95,7 +107,7 @@ machine.
 $ irondome init                          # choose: password, Touch ID, or both
 $ irondome add github --generate         # a 20-character password, stored
 $ irondome add stripe --kind secret      # paste an API key at the hidden prompt
-$ irondome get github                    # print it   (-c copies it and clears the clipboard after 30 s)
+$ irondome get github                    # print it   (-c copies it and clears the clipboard after 15 s)
 $ irondome otp github                    # current one-time code, if the entry has a TOTP secret
 $ irondome ls                            # names, usernames, URLs, tags; never secret values
 $ irondome status                        # which chip protects the vault, keyslots, grants
@@ -336,7 +348,7 @@ Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
 
 ## License
 
-[GPL-3.0-only](LICENSE). Copyright (C) 2023-2026 [King Hippopotamus](https://github.com/Nir-Ghub).
+[GPL-3.0-only](LICENSE). Copyright (C) 2023-2026 [King Hippopotamus](https://github.com/TheKingHippopotamus).
 
 The passphrase word list, `src/irondome/data/eff_large_wordlist.txt`, is not
 IronDome's and is not under the GPL: it is the EFF Large Wordlist by Joseph

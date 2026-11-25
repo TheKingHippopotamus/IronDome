@@ -45,7 +45,7 @@ class Setting(NamedTuple):
 
 
 SETTINGS: Dict[str, Setting] = {
-    "clipboard_clear_seconds": Setting(30, 5, 600, "seconds before a copied secret is cleared from the clipboard"),
+    "clipboard_clear_seconds": Setting(15, 5, 600, "seconds before a copied secret is cleared from the clipboard"),
     "session_ttl": Setting(900, 60, 43_200, "default lifetime of `irondome unlock` sessions, in seconds"),
     "grant_ttl": Setting(900, 60, 86_400, "default lifetime of grants, in seconds"),
     "password_length": Setting(20, 16, 512, "default length of generated passwords"),

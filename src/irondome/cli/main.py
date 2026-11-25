@@ -57,7 +57,7 @@ several bunkers on one machine (one per person or role):
   irondome --bunker bravo ls            work on it   (or: IRONDOME_BUNKER=bravo)
   irondome bunker use bravo             make it the default
 
-documentation: https://github.com/Nir-Ghub/IronDome
+documentation: https://github.com/TheKingHippopotamus/IronDome
 """
 
 

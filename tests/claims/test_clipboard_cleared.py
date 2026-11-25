@@ -2,7 +2,7 @@
 
 Statement: --copy hands the value to the system's clipboard tool on its
 standard input, never as an argument, and clears the clipboard after the
-bunker's clipboard_clear_seconds (30 by default), but only if the clipboard
+bunker's clipboard_clear_seconds (15 by default), but only if the clipboard
 still holds that value.
 
 No test here touches the clipboard of the person running the suite: the tools
@@ -62,7 +62,7 @@ def stand_in_tools(root: Path) -> Path:
     return tools
 
 
-def test_copy_asks_for_the_clipboard_to_be_cleared_after_the_bunkers_setting_30_seconds_by_default(
+def test_copy_asks_for_the_clipboard_to_be_cleared_after_the_bunkers_setting_15_seconds_by_default(
     cli, monkeypatch, capsys
 ):
     init(cli)
@@ -73,8 +73,8 @@ def test_copy_asks_for_the_clipboard_to_be_cleared_after_the_bunkers_setting_30_
     monkeypatch.setattr(clipboard, "copy", lambda value, seconds: copied.append((value, seconds)) or "pbcopy")
     assert main.main(["get", "github", "--copy"]) == 0
     shown = capsys.readouterr()
-    assert copied == [("the-github-token-1234", 30)]
-    assert "the-github-token-1234" not in shown.out + shown.err and "cleared in 30s" in shown.err
+    assert copied == [("the-github-token-1234", 15)]
+    assert "the-github-token-1234" not in shown.out + shown.err and "cleared in 15s" in shown.err
     ok(cli("config", "set", "clipboard_clear_seconds", "7", "--password-stdin", stdin=PASSWORD + "\n"))
     assert main.main(["get", "github", "--copy"]) == 0
     assert copied[-1] == ("the-github-token-1234", 7) and "cleared in 7s" in capsys.readouterr().err

@@ -619,7 +619,7 @@ Tests (6):
 
 **A copied secret is taken off the clipboard**
 
---copy hands the value to the system's clipboard tool on its standard input, never as an argument, and clears the clipboard after the bunker's clipboard_clear_seconds (30 by default), but only if the clipboard still holds that value. The tool is taken from a fixed list of system directories, never from $PATH, and on macOS and Linux it is used only if it belongs to root or to you and nobody else can write it; one that fails that is refused, not passed over for another.
+--copy hands the value to the system's clipboard tool on its standard input, never as an argument, and clears the clipboard after the bunker's clipboard_clear_seconds (15 by default), but only if the clipboard still holds that value. The tool is taken from a fixed list of system directories, never from $PATH, and on macOS and Linux it is used only if it belongs to root or to you and nobody else can write it; one that fails that is refused, not passed over for another.
 
 *Where it stops:* Clearing is best effort: every program running as you can read the clipboard until then, clipboard managers or sync may keep their own copy, and if the clearing helper is stopped, or the computer sleeps through the delay, the value stays until something else is copied. The check of the tool looks at its file, not at the directories above it.
 
@@ -628,7 +628,7 @@ Tests (6):
 
 Tests (13):
 
-- [`tests/claims/test_clipboard_cleared.py::test_copy_asks_for_the_clipboard_to_be_cleared_after_the_bunkers_setting_30_seconds_by_default`](../tests/claims/test_clipboard_cleared.py)
+- [`tests/claims/test_clipboard_cleared.py::test_copy_asks_for_the_clipboard_to_be_cleared_after_the_bunkers_setting_15_seconds_by_default`](../tests/claims/test_clipboard_cleared.py)
 - [`tests/claims/test_clipboard_cleared.py::test_boundary_until_it_is_cleared_every_program_of_yours_can_read_it`](../tests/claims/test_clipboard_cleared.py)
 - [`tests/unit/test_clipboard.py::test_copy_hands_the_value_over_on_stdin_and_never_as_an_argument`](../tests/unit/test_clipboard.py)
 - [`tests/unit/test_clipboard.py::test_the_default_search_path_ignores_path`](../tests/unit/test_clipboard.py)
