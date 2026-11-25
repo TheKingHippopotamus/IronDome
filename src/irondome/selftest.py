@@ -63,7 +63,15 @@ from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Seque
 from irondome import __version__, audit, caps, crypto, keys, memscan, nuke, otp, paths, unlock
 from irondome import device as devices
 from irondome.device.base import POLICY_BIOMETRY, POLICY_DEVICE
-from irondome.errors import AuthError, HardwareError, IronDomeError, PolicyError, UsageError, VaultError
+from irondome.errors import (
+    AuthError,
+    DeviceLockedError,
+    HardwareError,
+    IronDomeError,
+    PolicyError,
+    UsageError,
+    VaultError,
+)
 from irondome.secmem import SecureBuffer, _wipe_str, as_view, read_secret_from_fd, wipe_bytes
 from irondome.vault import Secret, Vault, VaultFile
 
@@ -1850,6 +1858,13 @@ def _guarded(check: Callable[[Sandbox], CheckResult], box: Sandbox) -> CheckResu
         return check(box)
     except SandboxError as exc:
         return _failed(f"stopped before it could leave its temporary directory: {exc}")
+    except DeviceLockedError:
+        # The check could not run; the claim is not broken. A locked screen is the ordinary state of a Mac
+        # reached over SSH, of a scheduled job, and of an agent working while its owner is away.
+        return _skipped(
+            "this Mac's screen is locked, and the check needs a key the Secure Enclave uses only while it is "
+            "unlocked; run it again at the unlocked Mac"
+        )
     except IronDomeError as exc:
         return _failed(_describe_error(exc))
     except Exception as exc:  # a check that breaks is a failed check, reported, never a crashed command

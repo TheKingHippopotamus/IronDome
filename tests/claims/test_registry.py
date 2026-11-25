@@ -196,6 +196,22 @@ def test_security_md_refers_to_claims_and_each_one_exists():
     assert named and named <= ids()
 
 
+def test_the_readme_has_no_link_or_image_that_only_works_inside_the_repository():
+    """The README is also the page PyPI shows, and there a relative link leads nowhere: the page of 3.2.2 had
+    three dead ones. Every link and image is a full address, and files of this repository are named on its
+    own host."""
+    text = (REPOSITORY / "README.md").read_text(encoding="utf-8")
+    targets = re.findall(r"\]\(([^)\s]+)\)", text) + re.findall(r'(?:src|href)="([^"]+)"', text)
+    assert len(targets) > 15
+    assert [target for target in targets if not target.startswith("https://")] == []
+    ours = [target for target in targets if "/TheKingHippopotamus/IronDome/" in target]
+    for target in ours:
+        kind, _, rest = target.partition("/TheKingHippopotamus/IronDome/")[2].partition("/")
+        if kind in ("blob", "tree") or "raw.githubusercontent.com" in target:
+            name = rest.partition("/")[2] if kind in ("blob", "tree") else target.partition("/IronDome/main/")[2]
+            assert (REPOSITORY / name.partition("#")[0]).exists(), target
+
+
 # -- what the README quotes of the program ---------------------------------------------
 
 

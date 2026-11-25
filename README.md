@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="static/irondome-readme.svg" alt="IronDome" width="120" />
+<img src="https://raw.githubusercontent.com/TheKingHippopotamus/IronDome/main/static/irondome-readme.svg" alt="IronDome" width="120" />
 
 # IronDome
 
@@ -10,17 +10,17 @@ A local vault for passwords, API keys and one-time codes, bound to your Mac's
 Secure Enclave or a TPM 2.0 on Linux. No cloud, no account, no network code, one
 direct dependency.
 
-[![Version](https://img.shields.io/badge/version-4.0.0rc1%2C%20not%20released%20yet-9bae4a)](CHANGELOG.md)
-[![Python](https://img.shields.io/badge/python-3.9%20to%203.14-9bae4a)](#install)
-[![License](https://img.shields.io/badge/license-GPL--3.0--only-9bae4a)](LICENSE)
-[![Claims](https://img.shields.io/badge/claims-each%20with%20its%20tests-9bae4a)](docs/CLAIMS.md)
+[![Version](https://img.shields.io/badge/version-4.0.0rc1%2C%20not%20released%20yet-9bae4a)](https://github.com/TheKingHippopotamus/IronDome/blob/main/CHANGELOG.md)
+[![Python](https://img.shields.io/badge/python-3.9%20to%203.14-9bae4a)](https://github.com/TheKingHippopotamus/IronDome#install)
+[![License](https://img.shields.io/badge/license-GPL--3.0--only-9bae4a)](https://github.com/TheKingHippopotamus/IronDome/blob/main/LICENSE)
+[![Claims](https://img.shields.io/badge/claims-each%20with%20its%20tests-9bae4a)](https://github.com/TheKingHippopotamus/IronDome/blob/main/docs/CLAIMS.md)
 
-[Website](https://iron-dome-bunker.vercel.app) · [Threat model](docs/THREAT_MODEL.md) · [Architecture](docs/ARCHITECTURE.md) · [Every claim and its test](docs/CLAIMS.md)
+[Website](https://iron-dome-bunker.vercel.app) · [Threat model](https://github.com/TheKingHippopotamus/IronDome/blob/main/docs/THREAT_MODEL.md) · [Architecture](https://github.com/TheKingHippopotamus/IronDome/blob/main/docs/ARCHITECTURE.md) · [Every claim and its test](https://github.com/TheKingHippopotamus/IronDome/blob/main/docs/CLAIMS.md)
 
 </div>
 
 > **Version 4 is not released yet.** This repository holds release candidate 1,
-> in its last checks before release. [Install](#install) says how to try it.
+> in its last checks before release. [Install](https://github.com/TheKingHippopotamus/IronDome#install) says how to try it.
 
 ```console
 $ irondome add github --kind secret --alias GITHUB_TOKEN    # paste the token at the hidden prompt
@@ -97,7 +97,7 @@ the command's output. On a Mac you can skip tokens entirely and approve each
 use with Touch ID, enforced by the Secure Enclave itself.
 
 **3. Every promise is a test you can run.** Each security claim in this README
-and on the website is listed in [docs/CLAIMS.md](docs/CLAIMS.md) with the tests
+and on the website is listed in [docs/CLAIMS.md](https://github.com/TheKingHippopotamus/IronDome/blob/main/docs/CLAIMS.md) with the tests
 that hold it, and `irondome verify` runs the checks that can run on your own
 machine.
 
@@ -199,13 +199,13 @@ narrow, short-lived grants, and rotate what they used.
 | Network | None: no module imports a networking library, and every command works with socket creation disabled |
 | Dependencies | One direct dependency: [`cryptography`](https://cryptography.io), which brings `cffi` and `pycparser` (and `typing-extensions` on Python 3.9 and 3.10) |
 
-Read [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) for who each of these stops
+Read [docs/THREAT_MODEL.md](https://github.com/TheKingHippopotamus/IronDome/blob/main/docs/THREAT_MODEL.md) for who each of these stops
 and who it does not.
 
 ## Verify it yourself
 
 ```console
-$ irondome verify            # runs the claim checks against this machine (a minute or two)
+$ irondome verify            # runs the claim checks against this machine (seconds to two minutes)
 $ irondome verify --touch    # also proves Touch ID with your finger
 $ irondome doctor            # which chip, which backend, file modes, memory locking
 ```
@@ -342,17 +342,32 @@ keychain: IronDome reads it with `/usr/bin/security` on macOS and
 `secret-tool` on Linux. Where neither can give it, you type or pipe the key
 yourself (`irondome migrate --legacy-key`).
 
+The recovery key 3.x gave you is not that key and opens nothing in version 4:
+3.x never derived a key from it. When `migrate` creates the new vault, it
+prints that vault's own recovery key.
+
+Run `migrate` again at any time: it adds only what is not in the new vault
+yet. Once you have checked the new vault, `irondome migrate --destroy-old`
+removes the old one. If that is interrupted, what is left of the old folder can
+no longer be opened by anything (its salt goes first): delete it by hand.
+
+The upgrade replaces the program and leaves two things of 3.x behind, neither
+of them used by version 4. With `pip`, the packages only 3.x needed stay
+installed (`keyring`, `textual`, `rich` and what they brought); `pip uninstall`
+removes them. With `pipx`, the old commands `irondome-cli` and `bunker` can
+remain in `~/.local/bin` as links that lead nowhere; delete them.
+
 ## Security
 
-Report vulnerabilities privately: see [SECURITY.md](SECURITY.md).
+Report vulnerabilities privately: see [SECURITY.md](https://github.com/TheKingHippopotamus/IronDome/blob/main/SECURITY.md).
 
 ## License
 
-[GPL-3.0-only](LICENSE). Copyright (C) 2023-2026 [King Hippopotamus](https://github.com/TheKingHippopotamus).
+[GPL-3.0-only](https://github.com/TheKingHippopotamus/IronDome/blob/main/LICENSE). Copyright (C) 2023-2026 [King Hippopotamus](https://github.com/TheKingHippopotamus).
 
 The passphrase word list, `src/irondome/data/eff_large_wordlist.txt`, is not
 IronDome's and is not under the GPL: it is the EFF Large Wordlist by Joseph
 Bonneau, Electronic Frontier Foundation (2016), included unchanged under
 [CC BY 3.0 US](https://creativecommons.org/licenses/by/3.0/us/); see
-[its notice](src/irondome/data/eff_large_wordlist.LICENSE.txt). Using it
+[its notice](https://github.com/TheKingHippopotamus/IronDome/blob/main/src/irondome/data/eff_large_wordlist.LICENSE.txt). Using it
 implies no endorsement by EFF.

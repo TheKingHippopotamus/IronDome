@@ -22,7 +22,7 @@ import os
 import signal
 import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives import hashes
@@ -180,9 +180,15 @@ def argon2id(password: BufferLike, salt: bytes, params: Argon2Params) -> SecureB
         raise VaultError("Argon2id salt is too short")
     view = as_view(password)
     out = SecureBuffer(KEY_LEN)
+    refusal: List[OSError] = []
     try:
-        if not _stretch_in_child(view, salt, params, out):
-            _stretch_here(view, salt, params, out)
+        if not _stretch_in_child(view, salt, params, out, refusal):
+            try:
+                _stretch_here(view, salt, params, out)
+            except VaultError:
+                if refusal:  # no process could be started, and then no thread either: that is not memory
+                    raise _no_process(refusal[0]) from None
+                raise
     except BaseException:
         out.wipe()
         raise
@@ -194,6 +200,15 @@ def _no_memory(params: Argon2Params) -> VaultError:
         f"not enough memory to stretch the password: Argon2id is set to use {params.memory_kib // 1024} MiB "
         "and this machine would not give it that much. Free some memory and try again; for a new vault or "
         "backup, IRONDOME_KDF_MEMORY_MIB sets a lower cost"
+    )
+
+
+def _no_process(refusal: OSError) -> VaultError:
+    return VaultError(
+        "the password was not stretched: the system would not start another process for Argon2id "
+        f"({refusal.strerror or refusal}), nor the threads it needs here. That is the limit on how many "
+        "processes this account may run (ulimit -u), not a lack of memory: close some programs or raise "
+        "the limit, and try again"
     )
 
 
@@ -248,8 +263,14 @@ def _read_exactly(descriptor: int, target: Any) -> int:
     return got
 
 
-def _stretch_in_child(view: Any, salt: bytes, params: Argon2Params, out: SecureBuffer) -> bool:
+def _stretch_in_child(
+    view: Any, salt: bytes, params: Argon2Params, out: SecureBuffer, refusal: Optional[List[OSError]] = None
+) -> bool:
     """Run Argon2id in a forked child and read the key into *out*. ``False``: no child was made.
+
+    When the system refused the pipes or the fork, its error is appended to
+    *refusal*, so that the caller can tell that from a process that may not
+    fork at all.
 
     The child gets the password through a pipe, not through the memory it
     inherits: on Linux a locked buffer reads as zeros in a child. It answers
@@ -269,10 +290,12 @@ def _stretch_in_child(view: Any, salt: bytes, params: Argon2Params, out: SecureB
         to_child = os.pipe()
         from_child = os.pipe()
         child = os.fork()
-    except OSError:
+    except OSError as exc:
         for descriptor in (*to_child, *from_child):
             if descriptor >= 0:
                 os.close(descriptor)
+        if refusal is not None:
+            refusal.append(exc)
         return False
     if child == 0:
         status = _CHILD_FAILED

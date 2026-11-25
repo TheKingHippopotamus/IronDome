@@ -178,12 +178,15 @@ def test_exit_statuses_are_frozen():
         errors.PolicyError: 5,
         errors.VaultError: 6,
         errors.HardwareError: 7,
+        errors.DeviceLockedError: 7,
     }
     for error, status in expected.items():
         assert error.exit_code == status and error("message").exit_code == status
         assert issubclass(error, IronDomeError) and str(error("message")) == "message"
     assert issubclass(errors.LockedOutError, AuthError)
-    distinct = [error for error in expected if error is not errors.LockedOutError]
+    assert issubclass(errors.DeviceLockedError, errors.HardwareError)  # a kind of it: the same status
+    kinds = (errors.LockedOutError, errors.DeviceLockedError)
+    distinct = [error for error in expected if error not in kinds]
     assert len({error.exit_code for error in distinct}) == len(distinct)
     assert set(errors.__all__) == {error.__name__ for error in expected} | {"EXIT_OK", "EXIT_INTERRUPTED"}
 

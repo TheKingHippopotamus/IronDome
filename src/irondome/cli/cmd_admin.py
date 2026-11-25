@@ -1137,6 +1137,15 @@ def cmd_import(ctx: Context, args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _legacy_key_help() -> str:
+    """How a person gets the key of a 3.x vault without a master password, and what is not that key."""
+    command = migrate_v3.keychain_read_command()
+    how = ""
+    if command is not None:
+        how = f" Where the account's keychain can be reached (its desktop session), this prints it: {command}."
+    return f"{how} The recovery key 3.x gave you is not this key and opens nothing: 3.x never derived a key from it"
+
+
 def _read_legacy(
     ctx: Context, legacy: migrate_v3.LegacyVault, args: argparse.Namespace, keyless: bool
 ) -> Tuple[List[migrate_v3.LegacyEntry], Optional[SecureBuffer], bool]:
@@ -1173,11 +1182,11 @@ def _read_legacy(
         if not ctx.password_stdin and not ctx.has_terminal:
             raise UsageError(
                 f"{missing} Give the key 3.x kept there (its 'master_key' value) on standard input, with "
-                "--legacy-key --password-stdin"
+                f"--legacy-key --password-stdin.{_legacy_key_help()}"
             )
         ctx.out.info(
             f"{missing} The key 3.x kept there (its 'master_key' value) is asked for instead: type it at the "
-            "terminal, or pipe it in with --legacy-key --password-stdin."
+            f"terminal, or pipe it in with --legacy-key --password-stdin.{_legacy_key_help()}."
         )
         key = ctx.read_secret("IronDome 3.x vault key (the 'master_key' value 3.x kept in the keychain): ")
         if key is None:
@@ -1242,7 +1251,13 @@ def _migration_password(
             "run again with --new-password"
             + (" and give the new master password on the second line of stdin" if ctx.password_stdin else "")
         )
-    return legacy_password.copy()
+    kept = legacy_password.copy()
+    try:
+        ctx.warn_if_weak(kept)  # 3.x took any eight characters: the kept password gets the remark a new one gets
+    except BaseException:
+        kept.wipe()
+        raise
+    return kept
 
 
 def _discard_new_vault(vault: Vault) -> None:
@@ -1268,23 +1283,29 @@ def _verify_migration(vault: Vault, entries: Sequence[migrate_v3.LegacyEntry]) -
         reopened.close()
 
 
-def _destroy_old(ctx: Context, legacy: migrate_v3.LegacyVault) -> Dict[str, Any]:
-    """Destroy the 3.x vault once the person confirmed it; never raises for what the run found."""
+def _destroy_old(ctx: Context, legacy: migrate_v3.LegacyVault, keyless: bool) -> Dict[str, Any]:
+    """Destroy the 3.x vault once the person confirmed it; never raises for what the run found.
+
+    *keyless*: the vault opened with the key 3.x kept in the OS keychain, so that key goes with it. A vault
+    that opened with its master password has no key there: a key found in the keychain is another vault's
+    and is left alone.
+    """
     question = (
         f"This deletes the IronDome 3.x vault in {legacy.path} for good, and its keychain entries when they "
         "are this vault's. Every entry was verified in the new vault."
     )
+    nothing: Dict[str, Any] = {"done": False, "files_deleted": 0, "leftovers": [], "errors": [], "notes": [],
+                               "keychain_cleared": None}
     if not ctx.assume_yes and not ctx.confirm_phrase(question, "DESTROY"):
-        return {"done": False, "confirmed": False, "files_deleted": 0, "leftovers": [], "errors": [],
-                "keychain_cleared": None}
+        return {**nothing, "confirmed": False}
     try:
-        report = migrate_v3.destroy_legacy(legacy)
+        report = migrate_v3.destroy_legacy(legacy, key_in_keychain=keyless)
     except IronDomeError as exc:
-        return {"done": False, "confirmed": True, "files_deleted": 0, "leftovers": [], "errors": [str(exc)],
-                "keychain_cleared": None}
+        return {**nothing, "confirmed": True, "errors": [str(exc)]}
     return {
         "done": report.success, "confirmed": True, "files_deleted": len(report.files_deleted),
-        "leftovers": list(report.leftovers), "errors": list(report.errors), "keychain_cleared": report.keychain_cleared,
+        "leftovers": list(report.leftovers), "errors": list(report.errors), "notes": list(report.notes),
+        "keychain_cleared": report.keychain_cleared,
     }
 
 
@@ -1382,7 +1403,7 @@ def cmd_migrate(ctx: Context, args: argparse.Namespace) -> int:
         _show_migration(ctx, bunker, legacy, report, problems, created)
     destroyed: Optional[Dict[str, Any]] = None
     if verified and args.destroy_old:
-        destroyed = _destroy_old(ctx, legacy)
+        destroyed = _destroy_old(ctx, legacy, keyless)
         if not ctx.out.json_mode:
             _show_destroyed(ctx, legacy, destroyed)
     elif verified and not ctx.out.json_mode:
@@ -1448,18 +1469,33 @@ def _show_destroyed(ctx: Context, legacy: migrate_v3.LegacyVault, destroyed: Dic
     if not destroyed["confirmed"]:
         ctx.out.info(f"Not confirmed: the 3.x vault in {legacy.path} was left as it was.")
         return
+    deleted = _count(destroyed["files_deleted"], "file")
     if destroyed["done"]:
-        # A destruction that succeeded either cleared the keychain or had nothing of this vault's to clear there.
-        keychain = (
-            "its OS keychain entries were removed"
-            if destroyed["keychain_cleared"]
-            else "the OS keychain was not touched (it holds nothing of this vault's, or is not reachable here)"
-        )
-        deleted = _count(destroyed["files_deleted"], "file")
+        # A destruction that succeeded cleared the keychain, or had nothing there that opens this vault.
+        for note in destroyed["notes"]:
+            ctx.out.info(f"Note: {note}.")
+        if destroyed["keychain_cleared"]:
+            keychain = "its OS keychain entries were removed"
+        elif destroyed["notes"]:
+            keychain = (
+                "it opened with its master password, so nothing in the OS keychain opens it, and what could "
+                "not be tidied there is named above"
+            )
+        else:
+            keychain = "the OS keychain was not touched (it holds nothing of this vault's, or is not reachable here)"
         ctx.out.ok(f"Destroyed the 3.x vault in {legacy.path}: {deleted} deleted; {keychain}.")
         return
     for problem in destroyed["errors"] + [f"left on disk: {path}" for path in destroyed["leftovers"]]:
         ctx.out.warn(problem)
+    if destroyed["files_deleted"] and not destroyed["leftovers"] and destroyed["keychain_cleared"] is False:
+        # Say which half is done: the files are gone, and only the key in the keychain is in doubt.
+        command = migrate_v3.keychain_remove_command()
+        by_hand = "" if command is None else f" Where the keychain can be reached, remove it with: {command}"
+        ctx.out.error(
+            f"the files of the 3.x vault in {legacy.path} were destroyed ({deleted} deleted), but its key may "
+            f"still be in the OS keychain, where it opens any copy of that vault.{by_hand}"
+        )
+        return
     ctx.out.error(f"the 3.x vault in {legacy.path} was not completely destroyed")
 
 

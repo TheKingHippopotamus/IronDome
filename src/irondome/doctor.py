@@ -511,7 +511,7 @@ def _clipboard(findings: _Findings) -> Dict[str, Any]:
     except UsageError as exc:
         findings.add(
             "note", "clipboard", f"--copy cannot work here: {exc}",
-            "install a clipboard tool, or print values instead of copying them",
+            "print values instead of copying them; what the line above names is what copying needs here",
         )
         return {"tool": None, "reader": None}
     findings.add("ok", "clipboard", f"copying to the clipboard uses {writer}, and {reader} to clear it")
@@ -583,7 +583,8 @@ def _legacy(findings: _Findings) -> Dict[str, Any]:
     if legacy is None:
         return {"present": False, "path": str(location), "mode": None, "error": None}
     findings.add(
-        "note", "legacy-vault", f"an IronDome 3.x vault is in {legacy.path}", "bring it over with: irondome migrate",
+        "note", "legacy-vault", f"an IronDome 3.x vault is in {legacy.path}",
+        "irondome migrate brings over what is not here yet; then irondome migrate --destroy-old removes it",
     )
     return {"present": True, "path": str(legacy.path), "mode": legacy.mode, "error": None}
 

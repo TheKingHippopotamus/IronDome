@@ -37,7 +37,7 @@ from irondome import paths
 from irondome.device import macos_se
 from irondome.device.base import DEVICE_SECRET_LEN, POLICY_BIOMETRY, POLICY_DEVICE, POLICY_PRESENCE
 from irondome.device.macos_se import SecureEnclaveBackend
-from irondome.errors import AuthError, HardwareError, UsageError, VaultError
+from irondome.errors import AuthError, DeviceLockedError, HardwareError, UsageError, VaultError
 
 pytestmark = pytest.mark.skipif(os.name == "nt", reason="the Secure Enclave backend is POSIX-only")
 
@@ -247,11 +247,25 @@ def test_a_rejected_key_reports_what_the_enclave_said(standin, backend):
         backend.unseal(descriptor, auth=None, interactive=False, reason="test")
 
 
-def test_a_locked_mac_is_reported_as_such(standin, backend):
+def test_a_device_key_refused_behind_the_lock_screen_is_not_blamed_on_the_lock(standin, backend):
+    """A device key works with the screen locked, so a refusal then is about the key: a by-hand trial found a
+    damaged key file reported as "this Mac is locked", with no word of the recovery key."""
     descriptor = enrolled(backend)
     standin.answer(agree=standin.fail(3, "device_locked", "this Mac is locked"))
-    with pytest.raises(HardwareError, match="this Mac is locked"):
+    with pytest.raises(HardwareError, match="the key file is damaged") as caught:
         backend.unseal(descriptor, auth=None, interactive=False, reason="test")
+    assert type(caught.value) is HardwareError
+    assert "screen is locked" in str(caught.value) and "irondome recovery use" in str(caught.value)
+
+
+@pytest.mark.parametrize("kind", [{"touch": True}, {"touch": True, "fresh": True}, {"touch": False, "fresh": True}])
+def test_a_locked_mac_is_reported_as_such_for_a_key_the_lock_does_stop(kind):
+    refusal = json.dumps({"error": "device_locked", "message": "this Mac is locked"}).encode()
+    with pytest.raises(DeviceLockedError, match="Secure Enclave unavailable: this Mac is locked"):
+        macos_se._raise_for(3, refusal, **kind)
+    with pytest.raises(HardwareError, match="Secure Enclave unavailable: no chip") as other:
+        macos_se._raise_for(3, json.dumps({"error": "no_enclave", "message": "no chip"}).encode(), **kind)
+    assert type(other.value) is HardwareError
 
 
 def test_a_helper_killed_by_a_signal(standin, backend):

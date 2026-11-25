@@ -936,6 +936,29 @@ def test_with_another_thread_running_argon2id_runs_here_and_gives_the_same_key(s
 
 
 @needs_fork
+def test_when_neither_a_process_nor_a_thread_can_be_started_the_limit_is_named_not_memory(monkeypatch):
+    """At the account's process limit the fork is refused and then Argon2id's own threads are too. A by-hand
+    trial got "not enough memory ... Free some memory" there, with 1.5 GiB free."""
+    def refused(*arguments):
+        raise OSError(35, "Resource temporarily unavailable")
+
+    def no_threads(*arguments):
+        raise crypto._no_memory(SMALL)
+
+    monkeypatch.setattr(crypto, "_stretch_here", no_threads)
+    with pytest.raises(VaultError, match="not enough memory"):  # no fork was tried: memory is the likely cause
+        monkeypatch.setattr(crypto, "_stretch_in_child", lambda *arguments: False)
+        argon2id(b"correct horse battery staple", bytes(16), SMALL)
+    monkeypatch.undo()
+    monkeypatch.setattr(crypto, "_stretch_here", no_threads)
+    monkeypatch.setattr(os, "fork", refused)
+    with pytest.raises(VaultError, match="ulimit -u") as caught:
+        argon2id(b"correct horse battery staple", bytes(16), SMALL)
+    assert "Resource temporarily unavailable" in str(caught.value)
+    assert "not enough memory" not in str(caught.value) and "not a lack of memory" in str(caught.value)
+
+
+@needs_fork
 @pytest.mark.parametrize("failing", ["fork", "pipe"])
 def test_where_the_system_refuses_a_child_argon2id_runs_here_and_no_descriptor_is_left_open(
     monkeypatch, stretched_here, failing

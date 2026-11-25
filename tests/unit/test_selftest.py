@@ -21,7 +21,7 @@ from irondome.cli import cmd_verify
 from irondome.cli.context import Context
 from irondome.cli.output import Output
 from irondome.device.base import POLICY_BIOMETRY, DeviceBackend, Probe
-from irondome.errors import AuthError, UsageError
+from irondome.errors import AuthError, DeviceLockedError, HardwareError, UsageError
 from irondome.secmem import SecureBuffer
 
 ENVIRONMENT = (
@@ -91,6 +91,23 @@ def test_a_check_that_reaches_outside_is_stopped_and_fails(decoy, tmp_path, monk
     assert result.status == selftest.FAIL and "stopped before it could leave" in result.detail
     assert snapshot(decoy) == before
     assert os.environ["IRONDOME_HOME"] == str(decoy / "irondome")
+
+
+def test_a_check_that_meets_a_locked_screen_is_skipped_not_failed(decoy, tmp_path, monkeypatch):
+    """The check could not run; the claim is not broken. A by-hand trial on a locked Mac got "FAIL ... that
+    claim does not hold on this machine; please report it" for a check that never ran."""
+    def locked(box):
+        raise DeviceLockedError("Secure Enclave unavailable: this Mac is locked")
+
+    def broken(box):
+        raise HardwareError("Secure Enclave unavailable: the chip said no")
+
+    monkeypatch.setitem(selftest.CHECKS, "tamper_evident", locked)
+    result = selftest.run(["tamper-evident"], root=tmp_path).outcomes[0].result
+    assert result.status == selftest.SKIPPED
+    assert "screen is locked" in result.detail and "run it again at the unlocked Mac" in result.detail
+    monkeypatch.setitem(selftest.CHECKS, "tamper_evident", broken)  # any other refusal of the chip still fails
+    assert selftest.run(["tamper-evident"], root=tmp_path).outcomes[0].result.status == selftest.FAIL
 
 
 def test_the_device_backend_is_only_ever_asked_from_inside_the_sandbox(decoy, tmp_path, monkeypatch):

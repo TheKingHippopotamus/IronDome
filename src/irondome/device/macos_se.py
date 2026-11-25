@@ -75,7 +75,7 @@ from irondome.device.base import (
     check_descriptor,
     new_ref,
 )
-from irondome.errors import AuthError, HardwareError, UsageError, VaultError
+from irondome.errors import AuthError, DeviceLockedError, HardwareError, UsageError, VaultError
 from irondome.secmem import SecureBuffer
 
 __all__ = ["SecureEnclaveBackend", "helper_source", "helper_status", "build_helper"]
@@ -382,6 +382,17 @@ def _raise_for(status: int, stderr: bytes, *, touch: bool = True, fresh: bool = 
             "fingerprints are added or removed, or when the vault came from another Mac. "
             f"Unlock with your master password or recovery key, then run: irondome auth touchid{said}"
         )
+    if status == _EXIT_UNAVAILABLE and code == "device_locked" and not touch and not fresh:
+        # A device key is AfterFirstUnlock: the lock screen does not stop it. The helper names the lock for
+        # any refusal it meets while the screen is locked, so here the lock is the less likely reason.
+        raise HardwareError(
+            "this Mac's Secure Enclave refused this device key, and the screen is locked. A device key works "
+            "with the screen locked once the Mac has been unlocked since it started, so unless it has just been "
+            "restarted the key file is damaged, or another Mac's chip made it. Unlock the screen and try again; "
+            "if it is refused then too, the recovery key opens the vault: irondome recovery use"
+        )
+    if status == _EXIT_UNAVAILABLE and code == "device_locked":
+        raise DeviceLockedError(f"Secure Enclave unavailable: {message or code}")
     if status == _EXIT_UNAVAILABLE:
         raise HardwareError(f"Secure Enclave unavailable: {message or code}")
     raise HardwareError(f"Secure Enclave helper failed ({status}): {message or code or 'no detail'}")

@@ -125,6 +125,8 @@ __all__ = [
     "stored_username",
     "read_entries",
     "keychain_master_key",
+    "keychain_read_command",
+    "keychain_remove_command",
     "keychain_unreachable",
     "import_into",
     "verify",
@@ -280,11 +282,16 @@ class MigrationReport:
 class LegacyDestroyReport:
     """What :func:`destroy_legacy` did.
 
-    ``keychain_cleared`` is True when the three keychain entries are confirmed
-    absent, False when one remains or the keychain could not be examined, and
-    None when the keychain was left alone (not asked for, or not this vault's).
-    ``success`` is True only when nothing is left on disk, nothing went wrong
-    and ``keychain_cleared`` is not False.
+    ``keychain_cleared`` is True when the keychain entries that are this
+    vault's are confirmed absent, False when the vault's key may remain there
+    (an entry survived, or the keychain could not be examined), and None when
+    the keychain was left alone or could not be tidied and holds nothing that
+    opens this vault. ``success`` is True only when nothing is left on disk,
+    nothing went wrong and ``keychain_cleared`` is not False.
+
+    ``notes`` is what a person should know and that is not a failure: what
+    could not be tidied in the keychain of a vault that opened with its master
+    password, and a vault key found there that is not this vault's.
     """
 
     success: bool
@@ -292,6 +299,7 @@ class LegacyDestroyReport:
     leftovers: List[str]
     keychain_cleared: Optional[bool]
     errors: List[str]
+    notes: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -399,7 +407,9 @@ def _locate(root: Path) -> Optional[Tuple[str, bytes, bool]]:
     salt = _read_regular(base / _SALT_FILE, _MAX_SMALL_BYTES)
     if salt is None:
         raise VaultError(
-            f"the IronDome 3.x vault in {root} has no {_SALT_FILE}; without the salt it cannot be decrypted"
+            f"the IronDome 3.x vault in {root} has no {_SALT_FILE}; without the salt it cannot be decrypted. "
+            "If `irondome migrate --destroy-old` was interrupted there, this is what it left: the salt goes "
+            "first, so nothing in that directory can be opened any more, and it can be deleted by hand"
         )
     if len(salt) != _SALT_LEN:
         raise VaultError(
@@ -847,6 +857,15 @@ def read_entries(
             "this IronDome 3.x vault has no master password: it opens with the key 3.x kept "
             "in the OS keychain. Pass master_key (see keychain_master_key)"
         )
+    if accepted and master is not None and master.username is None:
+        # The verifier covers the password alone, and the stored username cannot be read here: a mistyped
+        # username and a damaged store cannot be told apart, so neither is asserted.
+        raise AuthError(
+            f"the 3.x master password is right, but {store} does not open with the username {username!r}. "
+            "3.x made the username part of the key, exactly as it was typed then (capital letters count), and "
+            "its stored copy cannot be read on this machine to compare. Try again with the exact username; if "
+            "that is the one, the file is damaged or was replaced"
+        )
     if accepted:
         raise VaultError(
             f"the 3.x master username and password are right, but {store} does not decrypt with them: "
@@ -1097,6 +1116,57 @@ def _clear_keychain(errors: List[str]) -> bool:
             cleared = False
             errors.append(f"OS keychain entry {_KEYCHAIN_SERVICE}/{account} {problem}")
     return cleared
+
+
+def _tidy_keychain(notes: List[str]) -> Optional[bool]:
+    """The keychain of a vault that opened with its master password. True: confirmed to hold nothing of it.
+
+    Such a vault kept no key in the keychain, only ``recovery_hash`` and
+    ``auth_mode``, which open nothing: those two are removed, and a failure
+    to remove them is a note, not an error. ``master_key`` is not this
+    vault's and is never deleted here: it is the only key of a 3.x vault
+    without a master password, and the one in the keychain may belong to a
+    copy of such a vault kept elsewhere. When one is there, a note says so.
+    """
+    tidy = True
+    for account in _KEYCHAIN_ACCOUNTS[1:]:
+        problem = _keychain_forget(account)
+        if problem is not None:
+            tidy = False
+            notes.append(f"OS keychain entry {_KEYCHAIN_SERVICE}/{account} {problem}")
+    tool = _keychain_tool()
+    if tool is not None:
+        status, output = _run_tool(_keychain_commands(tool, _KEYCHAIN_ACCOUNTS[0])["probe"])
+        wipe_bytes(output)
+        if status == 0:
+            tidy = False
+            notes.append(
+                f"the OS keychain holds a 3.x vault key ({_KEYCHAIN_SERVICE}/{_KEYCHAIN_ACCOUNTS[0]}) that this "
+                "vault did not use. It was left alone: it is the only key of a 3.x vault without a master password"
+            )
+    return True if tidy else None
+
+
+def keychain_read_command() -> Optional[str]:
+    """The command that prints the key of a 3.x vault without a master password; None where there is none.
+
+    For a person to run where the keychain can be reached (the account's own
+    desktop session) when IronDome cannot reach it from where it runs.
+    """
+    if _PLATFORM == "darwin":
+        return f"security find-generic-password -s {_KEYCHAIN_SERVICE} -a {_KEYCHAIN_ACCOUNTS[0]} -w"
+    if _PLATFORM.startswith("linux"):
+        return f"secret-tool lookup service {_KEYCHAIN_SERVICE} username {_KEYCHAIN_ACCOUNTS[0]}"
+    return None
+
+
+def keychain_remove_command(account: str = _KEYCHAIN_ACCOUNTS[0]) -> Optional[str]:
+    """The command a person can run to remove one 3.x keychain entry by hand; None where there is none."""
+    if _PLATFORM == "darwin":
+        return f"security delete-generic-password -s {_KEYCHAIN_SERVICE} -a {account}"
+    if _PLATFORM.startswith("linux"):
+        return f"secret-tool clear service {_KEYCHAIN_SERVICE} username {account}"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1454,7 +1524,9 @@ def _has_other_names(path: Path) -> bool:
     return stat.S_ISREG(info.st_mode) and info.st_nlink > 1
 
 
-def destroy_legacy(legacy: LegacyVault, *, keychain: bool = True) -> LegacyDestroyReport:
+def destroy_legacy(
+    legacy: LegacyVault, *, keychain: bool = True, key_in_keychain: bool = True
+) -> LegacyDestroyReport:
     """Destroy the old vault: its directory tree and, when they are this vault's, its keychain entries.
 
     Before anything is touched the directory must still hold the vault that
@@ -1465,7 +1537,9 @@ def destroy_legacy(legacy: LegacyVault, *, keychain: bool = True) -> LegacyDestr
     Then, in this order: the keychain entries ``master_key``,
     ``recovery_hash`` and ``auth_mode`` (only when *keychain* is true and the
     vault is the one at ``~/.password_manager`` of this account, the only
-    vault they can belong to); every ``salt.bin``; the password stores and
+    vault they can belong to; with *key_in_keychain* false, for a vault that
+    was opened with its master password, only the two that are not a key:
+    see :func:`_tidy_keychain`); every ``salt.bin``; the password stores and
     backups; everything else; the directories. Files are overwritten once and
     unlinked (``paths.secure_delete``). Symbolic links are removed, never
     followed, and a link target outside the tree is reported as a leftover. A
@@ -1482,7 +1556,10 @@ def destroy_legacy(legacy: LegacyVault, *, keychain: bool = True) -> LegacyDestr
     errors: List[str] = []
     deleted: List[str] = []
     beyond: List[str] = []
-    cleared = _clear_keychain(errors) if keychain and _owns_keychain(root) else None
+    notes: List[str] = []
+    cleared: Optional[bool] = None
+    if keychain and _owns_keychain(root):
+        cleared = _clear_keychain(errors) if key_in_keychain else _tidy_keychain(notes)
 
     for directory in directories:
         with contextlib.suppress(OSError):  # a read-only directory would keep its contents from being unlinked
@@ -1529,4 +1606,5 @@ def destroy_legacy(legacy: LegacyVault, *, keychain: bool = True) -> LegacyDestr
         leftovers=leftovers,
         keychain_cleared=cleared,
         errors=errors,
+        notes=notes,
     )

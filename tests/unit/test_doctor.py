@@ -437,7 +437,10 @@ def test_legacy_vault_is_noticed(report_of: Callable[[], Dict[str, Any]]) -> Non
     report = report_of()
     assert report["legacy_vault"]["present"] is True
     (note,) = findings(report, "note", "legacy-vault")
-    assert note["remedy"] == "bring it over with: irondome migrate"
+    # True before the vault was brought over and after: doctor cannot tell which, so it names both steps.
+    assert note["remedy"] == (
+        "irondome migrate brings over what is not here yet; then irondome migrate --destroy-old removes it"
+    )
 
 
 def test_damaged_legacy_vault_is_a_warning(report_of: Callable[[], Dict[str, Any]]) -> None:

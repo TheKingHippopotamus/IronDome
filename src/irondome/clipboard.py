@@ -459,6 +459,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 2
     tool = _TOOLS[args.tool]
     time.sleep(args.clear_after)
+    for path in (args.reader, args.writer):  # looked at again: seconds have passed, and it is about to be run
+        if not os.path.isfile(path) or paths.program_fault(path):
+            return 2
     try:
         current = _run(tool, args.reader, tool.read_args, b"", capture=True)
     except IronDomeError:

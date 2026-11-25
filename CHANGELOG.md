@@ -388,6 +388,80 @@ workflow the project depends on, against the advisories of the day.
   `uv` makes the environments. One program fewer in the image the tests
   run in.
 
+### Found by upgrading from 3.2.2 by hand
+
+No earlier trial had a 3.x vault: the tests of `migrate` read vaults written
+by the old code, with a stand-in for the keychain. Before the release
+candidate went anywhere, someone who was not the author installed 3.2.2 as
+PyPI serves it, used it in each of its three modes (one with a real Secret
+Service), upgraded over it, and migrated. Every entry of all three vaults
+came over byte for byte and the old folder was unchanged to the last hash,
+also when the run was killed at each of its file renames. What was wrong was
+what the program said:
+
+- **`migrate --destroy-old` said "was not completely destroyed", with the
+  folder gone.** On a login with no Secret Service (SSH, a server, a
+  container) the keychain command fails for every request, and that was
+  reported as a failed destruction, with exit status 1, for a vault that
+  never had anything in a keychain. A vault that opened with its master
+  password kept no key there; for such a vault what cannot be tidied in
+  the keychain is now a note, and the run succeeds. A vault whose key is
+  in the keychain still fails when that key may remain, and the message
+  now says which half is done and gives the command that removes the key.
+- **`--destroy-old` removed a key from the keychain that was not this
+  vault's.** Only a 3.x vault without a master password has a key there.
+  When the vault being destroyed opened with its password, a key found in
+  the keychain belongs to another copy of a 3.x vault and is its only key:
+  it is now left alone, and a note says so.
+- **A mistyped 3.x username was answered "the username and password are
+  right, but the file is damaged".** Where the stored username cannot be
+  read (the name file is missing, or the computer was renamed), only the
+  password can be checked. The message now says that the password is right
+  and that the username could not be compared, and asks for the exact one.
+- **After a finished migration, `status` and `doctor` still said "bring it
+  over with: irondome migrate".** They cannot tell whether it was done, so
+  they now name both steps: `migrate` brings over what is not here yet,
+  `migrate --destroy-old` removes the old vault.
+- **Before migrating, `irondome ls` sent a 3.x user to `irondome init`.**
+  It now names the 3.x vault it found and `irondome migrate`.
+- **A kept 3.x master password got no remark.** 3.x accepted any eight
+  characters. The password carried over into the new vault now gets the
+  remark a newly typed weak one gets.
+- **Whoever was asked for the 3.x vault key was not told how to get it,**
+  nor that the recovery key 3.x printed is not that key. Both are said
+  now, with the command that prints the key where the keychain can be
+  reached.
+- **An interrupted `--destroy-old` could not be finished and nothing said
+  what to do.** The salt goes first, so what is left opens nothing; the
+  message says so and that the folder can be deleted by hand.
+- **On a Mac with the screen locked, `irondome verify` printed FAIL** for
+  the Touch ID claim, and "that claim does not hold on this machine". The
+  Secure Enclave uses such a key only while the screen is unlocked: the
+  check could not run. It is now reported as skipped, with the reason.
+- **A damaged Secure Enclave key file was blamed on the lock screen.** A
+  device key works while the screen is locked, so a refusal then is about
+  the key. The message says that and names `irondome recovery use`.
+- **At the account's process limit, unlocking said "not enough memory".**
+  The system refused a process and then the threads Argon2id needs. The
+  message now names the limit (`ulimit -u`).
+- **The helper that clears the clipboard checked its tools when it
+  started, not when it ran them** seconds later, which is not what the
+  entry above says. It now looks again after the wait.
+- **`init` on Linux began with "Checking for Touch ID..."**, which exists
+  on a Mac only. The line is printed there only.
+- **The README's links and image worked only inside the repository.** The
+  README is also the page PyPI shows; every link is now a full address,
+  and a test keeps it so. A section tells an upgrader what 3.x leaves
+  behind (its packages under `pip`, two dangling commands under `pipx`).
+
+Left as found, on purpose: an entry name longer than 200 characters is
+shortened (the `renamed` line shows both); two entries for one website are
+named `website (username)` and `irondome find` lists them; the audit log
+records the migration but not the destruction of the old vault; a migration
+killed in its first second can leave a recovery key that was never shown
+(`irondome recovery new` makes another); names with wide characters are out
+of line in `irondome ls`.
+
 ### Added
 
 - **Cryptography:** Argon2id (256 MiB, t=3, p=4 by default, 64 MiB on a

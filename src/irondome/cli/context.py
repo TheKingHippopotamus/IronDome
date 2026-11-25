@@ -373,17 +373,18 @@ class Context:
                 self.out.error(f"{exc}. Try again.")
                 continue
             try:
-                self._warn_if_weak(password)
+                self.warn_if_weak(password)
             except BaseException:
                 password.wipe()
                 raise
             return password
 
-    def _warn_if_weak(self, password: SecureBuffer) -> None:
+    def warn_if_weak(self, password: SecureBuffer) -> None:
         """A remark, never a refusal, when a new master password is one a guessing program finds early.
 
         Made wherever a new master password is taken (``init``, ``bunker create``, ``passwd``, ``recovery
-        use``), so that none of them accepts ``password`` without a word.
+        use``, and ``migrate`` when it keeps the 3.x one), so that none of them accepts ``password``
+        without a word.
         """
         strength = estimate_strength(password)
         if strength.label in _WEAK_LABELS:

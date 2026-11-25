@@ -1042,6 +1042,22 @@ def test_with_no_store_a_password_is_checked_against_the_verifier_when_there_is_
     assert migrate_v3.read_entries(legacy, username=FORGED_USERNAME, password=b"anything") == []
 
 
+def test_a_username_that_cannot_be_checked_is_not_called_right(old: LegacyDirectories) -> None:
+    """The verifier covers the password alone. With the stored username unreadable, a mistyped one was answered
+    "the 3.x master username and password are right, but ... the file is damaged" (a by-hand trial)."""
+    path, fixture = old.unpack("password_only")
+    (path / "secrets" / ".master_user.enc").unlink()
+    old.watch(path)
+    legacy = found(path)
+    right = credentials(fixture)
+    with pytest.raises(AuthError, match="master password is right, but .* does not open with the username") as caught:
+        migrate_v3.read_entries(legacy, username="not-" + right["username"], password=right["password"])
+    said = str(caught.value)
+    assert "are right" not in said and "Try again with the exact username" in said and "capital letters" in said
+    assert "the file is damaged or was replaced" in said  # still named, as the other thing it can be
+    assert migrate_v3.read_entries(legacy, **right)
+
+
 def test_the_verifier_of_the_first_program_is_understood(old: LegacyDirectories) -> None:
     """Before 1.0.1 the verifier was SHA-256(salt || password); it tells damage from a wrong password too."""
     path, fixture = old.unpack("script_2025")
@@ -2244,6 +2260,87 @@ def test_a_keychain_that_cannot_be_cleared_or_confirmed_is_never_reported_as_cle
     assert (report.success, report.keychain_cleared, report.leftovers) == (False, False, [])
     assert any(error.endswith(complaint) and error.startswith("OS keychain entry IronDome/") for error in report.errors)
     assert not legacy.path.exists()
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_a_vault_that_opened_with_its_password_never_takes_a_key_out_of_the_keychain(
+    platform: str, old: LegacyDirectories, our_keychain: Callable[[FakeTool], FakeTool]
+) -> None:
+    """A key in the keychain is the only key of a 3.x vault without a master password, and this vault has one:
+    the key is another vault's. A by-hand trial lost the key of a vault kept elsewhere this way."""
+    legacy, fixture = standard_vault(old, "password_only")
+    held = {**keychain_of(fixture), "recovery_hash": b"0" * 64, "master_key": b"another vault's only key"}
+    tool = our_keychain(FakeTool(platform, held))
+    report = migrate_v3.destroy_legacy(legacy, key_in_keychain=False)
+    assert (report.success, report.keychain_cleared, report.errors) == (True, None, [])
+    assert tool.store == {"master_key": b"another vault's only key"} and not legacy.path.exists()
+    (note,) = report.notes
+    assert "IronDome/master_key" in note and "was left alone" in note
+    deleted = [command[5] for command in tool.commands if command[1] in ("delete-generic-password", "clear")]
+    assert deleted == ["recovery_hash", "auth_mode"]
+    assert not any(command[-1] == "-w" for command in tool.commands)  # and on a Mac it is not read either
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux"])
+def test_a_vault_that_opened_with_its_password_has_its_keychain_tidied_and_says_so(
+    platform: str, old: LegacyDirectories, our_keychain: Callable[[FakeTool], FakeTool]
+) -> None:
+    legacy, fixture = standard_vault(old, "password_only")
+    tool = our_keychain(FakeTool(platform, keychain_of(fixture)))
+    report = migrate_v3.destroy_legacy(legacy, key_in_keychain=False)
+    assert (report.success, report.keychain_cleared, report.errors, report.notes) == (True, True, [], [])
+    assert tool.store == {} and not legacy.path.exists()
+
+
+def test_a_keychain_that_cannot_be_reached_does_not_fail_a_vault_that_kept_no_key_there(
+    old: LegacyDirectories, our_keychain: Callable[[FakeTool], FakeTool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A login without a Secret Service (SSH, a server): secret-tool exits 1 for everything. A by-hand trial got
+    "was not completely destroyed" and exit status 1 there, with the folder gone and nothing ever in a keychain."""
+    legacy, fixture = standard_vault(old, "password_only")
+    our_keychain(FakeTool("linux", {}, statuses={"clear": 1, "lookup": 1}))
+    report = migrate_v3.destroy_legacy(legacy, key_in_keychain=False)
+    assert (report.success, report.keychain_cleared, report.errors, report.leftovers) == (True, None, [], [])
+    assert report.notes == [
+        f"OS keychain entry IronDome/{account} could not be deleted (secret-tool exited with status 1)"
+        for account in ("recovery_hash", "auth_mode")
+    ]
+    assert not legacy.path.exists()
+    # The vault whose key IS in the keychain still fails there: its key may remain.
+    legacy, fixture = standard_vault(old, "biometric_only")
+    report = migrate_v3.destroy_legacy(legacy)
+    assert (report.success, report.keychain_cleared, report.notes) == (False, False, [])
+    monkeypatch.setattr(migrate_v3, "_keychain_tool", lambda: None)  # and with no command at all, a note says why
+    legacy, fixture = standard_vault(old, "password_only")
+    report = migrate_v3.destroy_legacy(legacy, key_in_keychain=False)
+    assert (report.success, report.keychain_cleared) == (True, None)
+    assert len(report.notes) == 2 and all("could not be examined" in note for note in report.notes)
+
+
+@pytest.mark.parametrize(
+    "platform, read, remove",
+    [
+        ("darwin", "security find-generic-password -s IronDome -a master_key -w",
+         "security delete-generic-password -s IronDome -a master_key"),
+        ("linux", "secret-tool lookup service IronDome username master_key",
+         "secret-tool clear service IronDome username master_key"),
+        ("win32", None, None),
+    ],
+)
+def test_the_commands_a_person_can_run_on_the_keychain_by_hand(
+    platform: str, read: Optional[str], remove: Optional[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(migrate_v3, "_PLATFORM", platform)
+    assert (migrate_v3.keychain_read_command(), migrate_v3.keychain_remove_command()) == (read, remove)
+
+
+def test_a_vault_whose_salt_is_gone_says_what_an_interrupted_destruction_leaves(old: LegacyDirectories) -> None:
+    path, _ = old.unpack("password_only")
+    (path / "secrets" / "salt.bin").unlink()
+    old.watch(path)
+    with pytest.raises(VaultError, match="has no salt.bin") as caught:
+        migrate_v3.detect(path)
+    assert "migrate --destroy-old` was interrupted" in str(caught.value) and "deleted by hand" in str(caught.value)
 
 
 @pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])

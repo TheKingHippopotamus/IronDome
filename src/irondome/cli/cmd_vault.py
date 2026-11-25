@@ -187,6 +187,10 @@ def _require_owner(ctx: Context, action: str) -> None:
         )
 
 
+#: What to do about a 3.x vault that is still there: true before it was brought over and after.
+_LEGACY_NEXT = "irondome migrate brings over what is not here yet; then irondome migrate --destroy-old removes it"
+
+
 def _create_hint(name: str) -> str:
     return "irondome init" if name == paths.FIRST_BUNKER else f"irondome bunker create {name}"
 
@@ -194,6 +198,19 @@ def _create_hint(name: str) -> str:
 def _require_vault() -> None:
     if not vault_exists():
         name = _bunker()
+        if name == paths.FIRST_BUNKER:
+            # Somebody who upgraded from 3.x and has not migrated yet: their entries are one command away.
+            from irondome import migrate_v3  # only here: every other command starts without it
+
+            try:
+                legacy = migrate_v3.detect()
+            except IronDomeError:
+                legacy = None
+            if legacy is not None:
+                raise VaultError(
+                    f"there is no IronDome 4 vault in bunker {name} yet. Your IronDome 3.x vault is in "
+                    f"{legacy.path}: bring it over with: irondome migrate (or start empty with: irondome init)"
+                )
         raise VaultError(f"there is no vault in bunker {name}. Create one with: {_create_hint(name)}")
 
 
@@ -769,7 +786,8 @@ def _offer_modes(ctx: Context) -> str:
     """On a terminal where Touch ID works and may be asked for, let the person choose; otherwise the password mode."""
     if not ctx.has_terminal or ctx.out.json_mode or _touch_forbidden(ctx) is not None:
         return MODE_PASSWORD
-    ctx.out.info("Checking for Touch ID...")
+    if sys.platform == "darwin":  # elsewhere there is nothing to look for, and saying so would only puzzle
+        ctx.out.info("Checking for Touch ID...")
     try:
         offered = _choose_backend(POLICY_BIOMETRY).probe().biometry
     except IronDomeError:
@@ -997,7 +1015,7 @@ def _print_status(ctx: Context, document: Dict[str, Any]) -> None:
     pairs.append(("snapshots", str(document["snapshots"])))
     legacy = document["legacy_v3"]
     if legacy is not None:
-        detail = f"damaged: {legacy['error']}" if legacy["error"] else "bring it over with: irondome migrate"
+        detail = f"damaged: {legacy['error']}" if legacy["error"] else _LEGACY_NEXT
         pairs.append(("3.x vault", f"{legacy['path']} ({detail})"))
     ctx.out.pairs(pairs, wrap=True)
 

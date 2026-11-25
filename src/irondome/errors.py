@@ -16,6 +16,7 @@ __all__ = [
     "PolicyError",
     "VaultError",
     "HardwareError",
+    "DeviceLockedError",
     "EXIT_OK",
     "EXIT_INTERRUPTED",
 ]
@@ -68,3 +69,7 @@ class HardwareError(IronDomeError):
     """The device key backend is unavailable or failed."""
 
     exit_code = 7
+
+
+class DeviceLockedError(HardwareError):
+    """The security chip will not use this kind of key while the screen is locked. Nothing is wrong with the key."""

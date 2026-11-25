@@ -1296,9 +1296,9 @@ def test_the_child_that_runs_argon2id_is_sent_the_prehash_never_the_master_passw
     sent: List[bytes] = []
     real = crypto._stretch_in_child
 
-    def spying(view: Any, salt: bytes, params: Any, out: Any) -> bool:
+    def spying(view: Any, salt: bytes, params: Any, out: Any, *rest: Any) -> bool:
         sent.append(bytes(view))
-        return real(view, salt, params, out)
+        return real(view, salt, params, out, *rest)
 
     monkeypatch.setattr(crypto, "_stretch_in_child", spying)
     password = (b"a long master password, " * 200)[:length]

@@ -285,6 +285,20 @@ def test_the_helper_runs_no_tool_that_others_can_write(tools: FakeTools, salt: b
     assert tools.clipboard() == b""
 
 
+@posix_only
+@pytest.mark.parametrize("which", ["pbcopy", "pbpaste"])
+def test_the_helper_looks_at_its_tools_again_after_the_wait(
+    tools: FakeTools, salt: bytes, which: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wait is when a tool can be replaced. A by-hand trial made one writable during it, and it was run."""
+    tools.set_clipboard(SECRET.encode("utf-8"))
+    digest = hashlib.sha256(salt + SECRET.encode("utf-8")).hexdigest()
+    monkeypatch.setattr(clipboard.time, "sleep", lambda seconds: (tools.bin / which).chmod(0o722))
+    assert clipboard.main(_helper_arguments(tools, digest)) == 2
+    assert tools.log() == []
+    assert tools.clipboard() == SECRET.encode("utf-8")
+
+
 def test_xsel_is_used_where_there_is_no_xclip(
     tools: FakeTools, spawned: List[Any], monkeypatch: pytest.MonkeyPatch
 ) -> None:

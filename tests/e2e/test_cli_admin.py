@@ -771,6 +771,23 @@ def test_migrate_destroys_the_old_vault_only_when_asked(cli: CLI) -> None:
         assert vault_values(vault) == legacy_values(fixture)
 
 
+def test_a_3x_user_is_pointed_at_migrate_before_it_and_not_misled_after(cli: CLI) -> None:
+    """Found by the first by-hand upgrade from 3.2.2: before migrating, ``ls`` said "Create one with: irondome
+    init"; after it, ``status`` and ``doctor`` went on saying "bring it over with: irondome migrate"."""
+    fixture = unpack_legacy("password_only")
+    refused = ok(cli("ls"), 6)
+    assert "Your IronDome 3.x vault is in" in refused.stderr
+    assert "bring it over with: irondome migrate" in refused.stderr
+    both_steps = "irondome migrate brings over what is not here yet; then irondome migrate --destroy-old removes it"
+    assert both_steps in " ".join(ok(cli("status")).stdout.split())
+    ok(cli("migrate", "--legacy-username", fixture["master_username"], "--password-stdin",
+           stdin=lines(fixture["master_password"])))
+    after = " ".join(ok(cli("status")).stdout.split())
+    assert both_steps in after and "bring it over with" not in after
+    checked = " ".join(cli("doctor").stdout.split())
+    assert both_steps in checked and "bring it over with" not in checked
+
+
 def test_migrate_without_a_3x_vault(cli: CLI, isolated: Path) -> None:
     assert "no IronDome 3.x vault" in ok(cli("migrate", "--password-stdin", stdin=lines(PASSWORD)), 3).stderr
     elsewhere = isolated / "elsewhere"
