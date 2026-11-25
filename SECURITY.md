@@ -185,33 +185,34 @@ dependencies is one of its steps.
   verbatim GPL-3.0 LICENSE), and uploads through PyPI Trusted Publishing,
   with no upload token.
 
-### How 4.0.0 will be released
+### How 4.0.0 was released
 
-4.0.0 is not released yet. This repository holds release candidate 1
-(`4.0.0rc1`), and PyPI still serves 3.2.2.
+Not through the release workflow: GitHub Actions is not running for this
+repository at present, so the workflow could not run. What was done in its
+place, on the maintainer's Mac:
 
-If GitHub Actions is running for this repository by then, the release goes
-through the release workflow described above, and PyPI attaches a provenance
-attestation to each file. If it is not, the release is made by hand on the
-maintainer's Mac, and this section will say so:
-
-* The complete gate, `scripts/check.sh --linux`, runs to its last line on the
+* The complete gate, `scripts/check.sh --linux`, ran to its last line on the
   release commit: the whole suite on macOS on Python 3.9 and 3.14 with the
   Secure Enclave, lint, types, the claims document, `pip-audit`, the build and
   a clean install of the wheel, then the whole suite in a Linux container
   with a software TPM on Python 3.9 and 3.13.
-* The two files are built with the release workflow's own recipe,
+* The two files were built with the release workflow's own recipe,
   `scripts/check.sh --build dist --release 4.0.0`, from the commit the tag
-  `v4.0.0` names, and uploaded with a PyPI token scoped to this project. PyPI
-  then holds no provenance attestation for them.
-* Their SHA-256 hashes go into the message of the tag `v4.0.0`
+  `v4.0.0` names, and uploaded by hand with a PyPI token scoped to this
+  project. PyPI therefore holds no provenance attestation for them.
+* Their SHA-256 hashes are in the message of the tag `v4.0.0`
   (`git show v4.0.0`), to compare with what PyPI serves.
+* Before that, release candidate 1 was tried by hand by someone who was not
+  its author, starting from 3.2.2 as PyPI served it: installed, used,
+  upgraded and migrated. The changelog says what that found; each fix was
+  then tried again in the same place.
 
 The build is not byte-for-byte reproducible: two builds of one commit differ
 in the timestamps inside the archives and in nothing else. To check a file
 from PyPI against the source, build the tag with that recipe and compare the
 two archives member by member.
 
-Each release says here how it was made.
+A later release goes through the release workflow once it can run; until
+one has, each release says here how it was made.
 
 IronDome has not been audited by an independent party.
