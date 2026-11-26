@@ -202,10 +202,11 @@ place, on the maintainer's Mac:
   project. PyPI therefore holds no provenance attestation for them.
 * Their SHA-256 hashes are in the message of the tag `v4.0.0`
   (`git show v4.0.0`), to compare with what PyPI serves.
-* Before that, release candidate 1 was tried by hand by someone who was not
-  its author, starting from 3.2.2 as PyPI served it: installed, used,
-  upgraded and migrated. The changelog says what that found; each fix was
-  then tried again in the same place.
+* Before that, release candidate 1 was tried by hand by an AI agent that had
+  not written it (the last section of this file says who wrote and who
+  reviewed this version), starting from 3.2.2 as PyPI served it: installed,
+  used, upgraded and migrated. The changelog says what that found; each fix
+  was then tried again in the same place.
 
 The build is not byte-for-byte reproducible: two builds of one commit differ
 in the timestamps inside the archives and in nothing else. To check a file
@@ -214,5 +215,35 @@ two archives member by member.
 
 A later release goes through the release workflow once it can run; until
 one has, each release says here how it was made.
+
+## Who wrote this, and who tried to break it
+
+Version 4 was written with an AI coding model: Anthropic's Claude, working in
+Claude Code at the direction of the project's owner. The owner decided what
+was built, did what needs a person (every Touch ID path, the upload to PyPI)
+and answers for the result. The commits the model wrote say so in their
+`Co-Authored-By` line.
+
+The reviews and trials of version 4 that this file and the changelog
+describe were done by AI agents as well. Each was a separate run of a model
+of the same family, started with no memory of writing the code and given
+only what its task names: for a trial "by hand", the built package and the
+published texts and no source code, in a container or a throwaway home; for
+a review, the change, or the list of everything the project installs. They
+were asked to use IronDome as a sceptical newcomer would, to follow its
+published texts to the letter, and to try to get a secret past it. Where the
+changelog says "a reviewer" or "an agent that was not the author", this is
+what it means. Only the Touch ID steps were done by a person.
+
+That found real faults, some of them after the whole test suite had passed;
+the changelog lists each one with what was done about it. It is not an
+independent audit. One owner started every one of those agents, they share
+the habits and the blind spots of the model that wrote the code, and no
+person outside the project has reviewed the design or the cryptography.
+
+Until 26 November 2026 the changelog of 4.0.0 called two of these agents "a
+second person" and "an independent reviewer". Those words were wrong and
+were changed here; the copy of the changelog inside the 4.0.0 source archive
+on PyPI still has them.
 
 IronDome has not been audited by an independent party.

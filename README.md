@@ -203,8 +203,11 @@ For the full suite: `pip install -e ".[dev]" && pytest`, and
 
 ## What IronDome does not do
 
-* **It has not been audited by a third party.** The tests are ours. Treat it as
-  beta software.
+* **It has not been audited by a third party.** The tests are ours. Version 4
+  was written with an AI coding model and tried before release by separate AI
+  agents;
+  [SECURITY.md](https://github.com/TheKingHippopotamus/IronDome/blob/main/SECURITY.md#who-wrote-this-and-who-tried-to-break-it)
+  says how, and why that is not an audit. Treat it as beta software.
 * **It cannot protect you from malware that already runs as you** while a vault
   is open, or from a compromised operating system. A keylogger can capture a
   master password, and malware can raise a Touch ID prompt of its own: read

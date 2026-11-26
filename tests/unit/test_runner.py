@@ -1981,7 +1981,7 @@ def test_public_names() -> None:
     assert CommandCancelledError.exit_code == 130
 
 
-# -- encodings a second person got past the mask with, by hand, on the final build ----------------------
+# -- encodings a second reviewer got past the mask with, by hand, on the final build ----------------------
 
 
 def test_patterns_cover_the_other_json_csv_percent_and_hex_writers() -> None:

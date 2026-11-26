@@ -1,4 +1,4 @@
-"""What a second person found by using the final build by hand, kept as tests.
+"""What a second reviewer found by using the final build by hand, kept as tests.
 
 After the faults of the first trial were fixed, a second reviewer was given
 the new package, the published texts, the first report and a machine to

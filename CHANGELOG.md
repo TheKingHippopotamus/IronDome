@@ -93,8 +93,10 @@ The new architecture removes all of them:
 ### Found by using it, before release
 
 The whole test suite passed, and then a reviewer was given the built package,
-the published texts and a machine to watch, and no source code. What that
-found, and what was done:
+the published texts and a machine to watch, and no source code. (A reviewer,
+here and below, is an AI agent that did not write the code: SECURITY.md says
+who wrote this version and who reviewed it.) What that found, and what was
+done:
 
 - **No command accepted the recovery key.** The key was tested through the
   Python interface only. `irondome recovery use` now opens the vault with
@@ -127,7 +129,7 @@ found, and what was done:
   read without asking (the variables it supplies are now listed; what such
   a file may hold was narrowed later, below).
 
-### Found by a second person, using the build with those fixes
+### Found by a second reviewer, using the build with those fixes
 
 A second reviewer got the fixed package, the changed texts, the first report
 and the same kind of machine, and again no source code. The recovery key
@@ -245,7 +247,7 @@ needs a finger). What it found, and what was done:
   owner's own `get` and `otp` leave no audit record; `nuke` and `bunker rm`
   at a terminal ask for a typed word, not for the password.
 
-An independent reviewer then read these changes and found three faults in
+A separate reviewer then read these changes and found three faults in
 them (a grant still announced as 59s now and then, the importer and the
 search not yet using the one Unicode form), which are fixed above.
 
@@ -294,7 +296,7 @@ promise. What it found, and what was done:
   did the flag; and `init` no longer offers the Touch ID modes where the
   prompt is forbidden.
 
-An independent reviewer then read the new output code. The first version
+A separate reviewer then read the new output code. The first version
 wrapped every long value, a password shown by `show --reveal` included: a
 tab became spaces, spaces at the end were dropped, a long passphrase was
 broken over two lines. It also took prose for part of a command in one
@@ -359,7 +361,7 @@ and those tests are written now. One was a fault:
 
 ### Found by a review of everything the project installs
 
-Someone who was not the author went through every package, tool, image and
+An agent that was not the author went through every package, tool, image and
 workflow the project depends on, against the advisories of the day.
 
 - **The audit of dependencies looked at only part of the lockfile.**
@@ -393,7 +395,7 @@ workflow the project depends on, against the advisories of the day.
 
 No earlier trial had a 3.x vault: the tests of `migrate` read vaults written
 by the old code, with a stand-in for the keychain. Before the release
-candidate went anywhere, someone who was not the author installed 3.2.2 as
+candidate went anywhere, an agent that was not the author installed 3.2.2 as
 PyPI serves it, used it in each of its three modes (one with a real Secret
 Service), upgraded over it, and migrated. Every entry of all three vaults
 came over byte for byte and the old folder was unchanged to the last hash,
