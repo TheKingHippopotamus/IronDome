@@ -203,7 +203,7 @@ place, on the maintainer's Mac:
 * Their SHA-256 hashes are in the message of the tag `v4.0.0`
   (`git show v4.0.0`), to compare with what PyPI serves.
 * Before that, release candidate 1 was tried by hand by an AI agent that had
-  not written it (the last section of this file says who wrote and who
+  not written it (the last section of this file says who made and who
   reviewed this version), starting from 3.2.2 as PyPI served it: installed,
   used, upgraded and migrated. The changelog says what that found; each fix
   was then tried again in the same place.
@@ -216,34 +216,49 @@ two archives member by member.
 A later release goes through the release workflow once it can run; until
 one has, each release says here how it was made.
 
-## Who wrote this, and who tried to break it
+## Who made this, and who tried to break it
 
-Version 4 was written with an AI coding model: Anthropic's Claude, working in
-Claude Code at the direction of the project's owner. The owner decided what
-was built, did what needs a person (every Touch ID path, the upload to PyPI)
-and answers for the result. The commits the model wrote say so in their
-`Co-Authored-By` line.
+IronDome is the work of Nir Elmaliah (King.Hippopotamus; TheKingHippopotamus
+on GitHub). He started it in April 2025, has published every version of it,
+and maintains it. Version 3 was the one that published a list of its own
+limits. Version 4 exists because he decided that five of them had to become
+false, and set how that would be judged: every promise written down as a
+claim, with the tests that hold it and the place where it stops; nothing
+called done before it was verified; and every release candidate used by hand
+by a reviewer that had not seen the code.
 
-The reviews and trials of version 4 that this file and the changelog
-describe were done by AI agents as well. Each was a separate run of a model
-of the same family, started with no memory of writing the code and given
-only what its task names: for a trial "by hand", the built package and the
-published texts and no source code, in a container or a throwaway home; for
-a review, the change, or the list of everything the project installs. They
-were asked to use IronDome as a sceptical newcomer would, to follow its
+Version 4 was built to that standard with an AI coding model: Anthropic's
+Claude, working in Claude Code under his direction. He decided what was built
+and what was not, down to the names of the commands, commissioned the review
+of everything the project installs, ran what needs a person and a real
+machine (every Touch ID path among them), and made the release himself. The
+commits in which the model wrote code say so in their `Co-Authored-By` line.
+He answers for the result.
+
+The reviews and trials of version 4 that this file and the changelog describe
+were done by AI agents, on his instruction. Each was a separate run of a
+model of the same family, started with no memory of writing the code and
+given only what its task names: for a trial "by hand", the built package and
+the published texts and no source code, in a container or a throwaway home;
+for a review, the change, or the list of everything the project installs.
+They were asked to use IronDome as a sceptical newcomer would, to follow its
 published texts to the letter, and to try to get a secret past it. Where the
 changelog says "a reviewer" or "an agent that was not the author", this is
-what it means. Only the Touch ID steps were done by a person.
+what it means. The steps that need a finger on a sensor he did himself.
 
 That found real faults, some of them after the whole test suite had passed;
 the changelog lists each one with what was done about it. It is not an
-independent audit. One owner started every one of those agents, they share
-the habits and the blind spots of the model that wrote the code, and no
-person outside the project has reviewed the design or the cryptography.
+independent audit. Every one of those agents was started from inside the
+project, they share the habits and the blind spots of the model that wrote
+the code, and no person outside the project has reviewed the design or the
+cryptography.
 
 Until 26 November 2026 the changelog of 4.0.0 called two of these agents "a
 second person" and "an independent reviewer". Those words were wrong and
 were changed here; the copy of the changelog inside the 4.0.0 source archive
-on PyPI still has them.
+on PyPI still has them. And for one day, 26 to 27 November 2026, this
+section said only that the model worked "at the direction of the project's
+owner": it did not name him or say what he did. That understated his part
+and was corrected.
 
 IronDome has not been audited by an independent party.

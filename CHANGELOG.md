@@ -95,7 +95,7 @@ The new architecture removes all of them:
 The whole test suite passed, and then a reviewer was given the built package,
 the published texts and a machine to watch, and no source code. (A reviewer,
 here and below, is an AI agent that did not write the code: SECURITY.md says
-who wrote this version and who reviewed it.) What that found, and what was
+who made this version and who reviewed it.) What that found, and what was
 done:
 
 - **No command accepted the recovery key.** The key was tested through the

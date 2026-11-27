@@ -15,7 +15,7 @@ readme = "README.md"
 license = "GPL-3.0-only AND CC-BY-3.0-US"
 license-files = ["LICENSE", "src/irondome/data/eff_large_wordlist.LICENSE.txt"]
 requires-python = ">=3.9.2"  # cryptography 50 excludes 3.9.0 and 3.9.1
-authors = [{ name = "King Hippopotamus" }]
+authors = [{ name = "Nir Elmaliah (King.Hippopotamus)" }]
 keywords = [
     "password-manager", "secrets", "secrets-manager", "vault", "cli",
     "ai-agents", "llm", "mcp", "model-context-protocol", "api-keys", "credentials",
