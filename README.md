@@ -62,7 +62,9 @@ and Secure Enclave support compiles a Swift helper of about 250 lines on first u
 Xcode Command Line Tools; nothing is downloaded). On Linux the TPM 2.0 is reached
 through `tpm2-tools`. Without a usable chip or those tools, the device key is a
 file in your home directory, and `irondome init` and `irondome status` say so.
-Upgrading from 3.x: `irondome migrate`.
+Upgrading from 3.x: upgrade the program first (`pipx upgrade IronDome`), then
+`irondome migrate`. Until the program is version 4, `irondome` opens the 3.x
+screen whatever is typed after it.
 
 ## Why another password manager
 
@@ -325,8 +327,20 @@ command, `irondome`. The Textual TUI is gone, and so are the 3.x commands
 
 ```console
 $ pipx upgrade IronDome
+$ irondome --version          # prints a version 4 number; 3.x opens its screen instead
 $ irondome migrate            # reads ~/.password_manager, verifies every entry, leaves it untouched
 ```
+
+`migrate` is a command of version 4, so the program is upgraded first. In 3.x
+the command `irondome` is the full-screen program and reads nothing typed
+after it: `irondome migrate` and `irondome --version` open the old screen.
+When that happens, the program is still 3.x. Installed with `pip`, it is
+upgraded with `pip install --upgrade IronDome`.
+
+Version 4 needs Python 3.9.2 or newer, and 3.x ran on 3.8. On an older Python
+`pip` and `pipx` find no version 4 they can install and stay on 3.2.2 without
+an error (`pipx upgrade` answers "already at latest version 3.2.2"). Install it
+with a newer Python: `pipx reinstall --python python3.13 IronDome`.
 
 A 3.x vault without a master password opens with the key 3.x kept in the OS
 keychain: IronDome reads it with `/usr/bin/security` on macOS and
